@@ -31,9 +31,10 @@
 ; Remaining sectors: file data
 ;
 ; The filesystem works around a file allocation table, with 1440 words in it.
-; Each entry stores the next sector used for the file using that sector. 0xFFFF
-; is used for sectors that are not part of a file, and for sectors that are the
-; last sectors in their files.
+; Each entry stores the next sector used for the file using that sector. Sectors
+; that are the last sectors in their file, have the high bit set, with the
+; remaining bits used to give the number of used words in the sector. The FAT
+; entries for unused sectors are 0xFFFF.
 ;
 ; There is also a free bitmap, storing a 1 for free sectors and a 0 for used
 ; sectors. Bits are used from words in LSB-first order.
@@ -82,13 +83,14 @@ define BBFS_HEADER_FREEMASK 6
 define BBFS_HEADER_FAT 96
 
 ; BFFS_FILE: file handle structure
-define BBFS_FILE_SIZEOF 517
+define BBFS_FILE_SIZEOF 518
 define BBFS_FILE_DRIVE 0 ; BBOS Disk drive number that the file is on
 define BBFS_FILE_FILESYSTEM_HEADER 1 ; Address of the BFFS_HEADER for the file
 define BBFS_FILE_START_SECTOR 2 ; Sector that the file starts at
 define BBFS_FILE_SECTOR 3 ; Sector currently in buffer
-define BBFS_FILE_OFFSET 4 ; Offset in the sector (in words)
-define BBFS_FILE_BUFFER 5 ; 512-word buffer for file data for the current sector
+define BBFS_FILE_OFFSET 4 ; Offset in the sector at which to read/write next
+define BBFS_FILE_MAX_OFFSET 5 ; Numkber of used words in the sector
+define BBFS_FILE_BUFFER 6 ; 512-word buffer for file data for the current sector
 
 ; BBFS_DIRHEADER: directory header structure
 define BBFS_DIRHEADER_SIZEOF 2
@@ -169,7 +171,8 @@ define BBFS_TYPE_FILE 1
 ;   Reset back to the beginning of an opened file. Returns an error code.
 ;
 ; bbfs_file_flush(*file)
-;   Flush any data written to the file to disk. Returns an error code.
+;   Flush any data written to the file to disk. Responsible for updating the
+;   length of the last sector in the FAT if necessary. Returns an error code.
 ;
 ; bbfs_file_write(*file, *data, size)
 ;   Write the given number of words, starting at the given address, to the given
@@ -184,8 +187,8 @@ define BBFS_TYPE_FILE 1
 ;   necessary. Returns an error code.
 ;
 ; bbfs_file_truncate(*file)
-;   Deallocate all sectors in the file after the current one. Returns an error
-;   code.
+;   Deallocate all sectors in the file after the current one, and make the file
+;   end at the current position. Returns an error code.
 ;
 ; bbfs_file_delete(*file)
 ;   Deallocate all sectors in the file. Returns an error code. After calling

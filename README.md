@@ -48,9 +48,9 @@ Here is the basic structure of a BBFS disk:
 ; Remaining sectors: file data
 ```
 
-The File Allocation Table (FAT) connects all the sectors that make up a file, by pointing from each sector to the sector that comes after it in the file. In this way, a single sector number (for the file's first sector) can define an entiere file on disk.
+The File Allocation Table (FAT) connects all the sectors that make up a file, by pointing from each sector to the sector that comes after it in the file. In this way, a single sector number (for the file's first sector) can define an entire file on disk.
 
-A downside of this approach is that file sizes are only tracked to the nearest sector. Unless you terminate your files yourself, you can easily read past the real data in a file and get garbage data that happened to be floating around in memory when the last sector was written.
+Since a file may not incluse all of its last sector, the last entry in the FAT for a file has the high bit set (to indicate that it is the last entry), while the remaining bits give the number of used words in that sector.
 
 
 # BBFS API

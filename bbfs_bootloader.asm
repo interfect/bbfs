@@ -26,13 +26,14 @@ define BBFS_HEADER_FREEMASK 6
 define BBFS_HEADER_FAT 96
 
 ; BFFS_FILE: file handle structure
-define BBFS_FILE_SIZEOF 517
+define BBFS_FILE_SIZEOF 518
 define BBFS_FILE_DRIVE 0 ; BBOS Disk drive number that the file is on
 define BBFS_FILE_FILESYSTEM_HEADER 1 ; Address of the BFFS_HEADER for the file
 define BBFS_FILE_START_SECTOR 2 ; Sector that the file starts at
 define BBFS_FILE_SECTOR 3 ; Sector currently in buffer
-define BBFS_FILE_OFFSET 4 ; Offset in the sector (in words)
-define BBFS_FILE_BUFFER 5 ; 512-word buffer for file data for the current sector
+define BBFS_FILE_OFFSET 4 ; Offset in the sector at which to read/write next
+define BBFS_FILE_MAX_OFFSET 5 ; Numkber of used words in the sector
+define BBFS_FILE_BUFFER 6 ; 512-word buffer for file data for the current sector
 
 ; BBFS_DIRHEADER: directory header structure
 define BBFS_DIRHEADER_SIZEOF 2
@@ -322,6 +323,8 @@ bbfs_file_open_bl:
 ; [Z+1]: Buffer to read into
 ; [Z]: Number of words to read
 ; Returns: error code in [Z]
+; WARNING: This bootloader version only tracks file length to the nearest
+; sector!
 bbfs_file_read_bl:
     ; Set up frame pointer
     SET PUSH, Z
@@ -372,7 +375,7 @@ bbfs_file_read_bl:
     ADD A, BBFS_HEADER_FAT
     ADD A, [B+BBFS_FILE_SECTOR]
     
-    IFE [A], 0xFFFF
+    IFG [A], 0x7FFF
         ; Otherwise, the file is over
         SET PC, .error_end_of_file
     
