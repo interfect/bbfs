@@ -205,6 +205,10 @@ load_done_bl:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
+    ; Pass on the drive we were loaded from in A.
+    ; It's in B right now.
+    SET A, B
+    
     SET PC, 0
 
 file_not_found_bl:
