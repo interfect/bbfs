@@ -130,6 +130,9 @@ define BBFS_ERR_NOTFOUND            0x1002
 define BBFS_TYPE_DIRECTORY 0
 define BBFS_TYPE_FILE 1
 
+; What sector is the root directory always in?
+define BBFS_ROOT_DIRECTORY 4
+
 ; Functions
 ;
 ; API level 0: disk

@@ -15,6 +15,16 @@ define SCROLL_SCREEN    0x1005
 define GET_SCREEN_SIZE  0x1006
 ;Read Character          0x3001  Blocking                Char            1.0
 define READ_CHARACTER   0x3001
+; Get Drive Count         0x2000  OUT Drive Count         Drive Count     1.0
+; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
+define GET_DRIVE_COUNT 0x2000
+define CHECK_DRIVE_STATUS 0x2001
+
+; Drive status codes
+define STATE_NO_MEDIA 0
+define STATE_READY 1
+define STATE_READY_WP 2
+define STATE_BUSY 3
 
 ; Key codes
 define KEY_BACKSPACE 0x10
@@ -31,6 +41,14 @@ define SHELL_COMMAND_LINE_LENGTH 128
 ; How long can a command be, including a trailing null? Max file name length
 ; minus extension.
 define SHELL_COMMAND_LENGTH 13
+
+; Where si the root directory on a BBFS disk? TODO: restructure bbfs includes to
+; make it so we can just use the bbfs defines.
+define BBFS_ROOT_DIRECTORY 4
+
+; What's the BBOS bootloader magic number?
+define BBOS_BOOTLOADER_MAGIC 0x55AA
+define BBOS_BOOTLOADER_MAGIC_POSITION 511
 
 start:
     ; The drive we loaded off of is in A.
@@ -90,6 +108,8 @@ command_loop:
 ; shell_builtin_ver(*arguments)
 ;   Print the shell version information.
 ;
+; shell_builtin_format(*arguments)
+;   Format the disk in the drive with the given letter as bootable.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -463,7 +483,9 @@ shell_exec:
     ADD SP, 1 ; Ignore anything returned
     SET PC, .return
             
-.not_a_builtin: 
+.not_a_builtin:
+    ; TODO: see if we said "B:" and if so switch to that drive.
+
     ; TODO: search the disk.
     
     ; Say we couldn't find the command.
@@ -499,6 +521,8 @@ shell_builtin_ver:
     SET Z, SP
     ADD Z, 2
     
+    SET PUSH, A ; BBOS calls
+    
     ; Ignore the arguments
     
     ; Print the version strings
@@ -515,8 +539,255 @@ shell_builtin_ver:
     ADD SP, 2
     
     ; Return
+    SET A, POP
     SET Z, POP
     SET PC, POP
+
+; shell_builtin_format(*arguments)
+; Format the disk in the drive with the given letter.  
+; [Z]: argument string, with first letter being drive to format.  
+shell_builtin_format:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls
+    SET PUSH, B ; Drive number
+    
+    ; Try and read a drive number from the argument string
+    SET B, [Z]
+    SET B, [B]
+    
+    ; If it's in the upper-case ASCII range, lower-case it
+    IFL B, 0x7B
+        IFG B, 0x60
+            SUB B, 32
+            
+    IFL B, 0x41
+        ; 'A' is the first valid drive letter
+        SET PC, .error_bad_drive_letter
+        
+    IFG B, 0x5A
+        ; 'Z' is the first possible drive letter
+        SET PC, .error_bad_drive_letter
+        
+    ; Convert from drive letter to drive number.
+    SUB B, 0x41
+    
+    ; Get the drive count from BBOS
+    SUB SP, 1
+    SET A, GET_DRIVE_COUNT
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    SUB A, 1 ; We know we have 1 drive, so knock this down to (probably) 7
+    IFG B, A
+        ; We're out of bounds wrt the drives installed
+        SET PC, .error_no_drive
+        
+    ; Now check to make sure there's a writable disk
+    SET PUSH, B
+    SET A, CHECK_DRIVE_STATUS
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    ; Shift down to have only the high (status) octet
+    SHR A, 8
+    
+    ; Check to make sure we're status ready
+    IFE A, STATE_NO_MEDIA
+        SET PC, .error_no_media
+        
+    IFE A, STATE_READY_WP
+        SET PC, .error_write_protected
+    
+    IFN A, STATE_READY
+        SET PC, .error_unknown
+        
+    ; Now we can actually do the work.
+    
+    ; Make a filesystem
+    
+    ; Format the header
+    SET PUSH, header ; Arg 1: header pointer
+    JSR bbfs_header_format
+    ADD SP, 1
+    
+    ; Save the header to the disk
+    SET PUSH, B ; Arg 1: drive number
+    SET PUSH, header ; Arg 2: header pointer
+    JSR bbfs_drive_save
+    ADD SP, 2
+    
+    ; Make a root directory.
+    ; Since it's the first thing on the disk it ends up at the right sector.
+    SET PUSH, directory ; Arg 1: directory handle to open
+    SET PUSH, header ; Arg 2: header to make the directory in
+    SET PUSH, B ; Arg 3: drive to work on
+    JSR bbfs_directory_create
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+    
+    ; Save a memory image to "BOOT.IMG"
+    ; Make a file
+    
+    SET PUSH, file ; Arg 1: file struct to populate
+    SET PUSH, header ; Arg 2: header to work in
+    SET PUSH, B ; Arg 3: drive to work on
+    JSR bbfs_file_create
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
+    ; Stick it in the directory
+    
+    ; Populate an entry for it in the directory
+    SET [entry+BBFS_DIRENTRY_TYPE], BBFS_TYPE_FILE
+    SET [entry+BBFS_DIRENTRY_SECTOR], [file+BBFS_FILE_START_SECTOR]
+    
+    ; Pack in a filename
+    SET PUSH, str_boot_filename ; Arg 1: string to pack
+    SET PUSH, entry ; Arg 2: place to pack it
+    ADD [SP], BBFS_DIRENTRY_NAME
+    JSR bbfs_filename_pack
+    ADD SP, 2
+    
+    ; Add the entry to the directory (which saves it to disk)
+    SET PUSH, directory
+    SET PUSH, entry
+    JSR bbfs_directory_append
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+    
+    ; Write the whole running program to the file.
+    SET PUSH, file ; Arg 1: file pointer to write to
+    SET PUSH, 0 ; Arg 2: start address (start of memory)
+    SET PUSH, bootloader_code ; Arg 3: words to write
+    ADD [SP], BBFS_WORDS_PER_SECTOR ; Add on the length of the bootloader.
+    JSR bbfs_file_write
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
+    ; And flush
+    SET PUSH, file
+    JSR bbfs_file_flush
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
+    ; Now all we have to do is install the bootloader.
+    ; First set its magic word
+    SET [bootloader_code+BBOS_BOOTLOADER_MAGIC_POSITION], BBOS_BOOTLOADER_MAGIC
+    
+    ; Then make a raw BBOS call to stick it as the first sector of the drive
+    SET PUSH, 0 ; Arg 1: sector
+    SET PUSH, bootloader_code ; Arg 2: pointer
+    SET PUSH, B ; Arg 3: drive number
+    SET A, WRITE_DRIVE_SECTOR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 3
+    
+    ; Put back the magic word so we don't change our image
+    SET [bootloader_code+BBOS_BOOTLOADER_MAGIC_POSITION], 0
+    
+    ; Say we succeeded
+    SET PUSH, str_format_success ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    set PC, .say_drive_and_return
+    
+.error_bad_drive_letter:
+    
+    ; Put the error message
+    SET PUSH, str_bad_drive_letter ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Don't try and say the bad drive letter.
+    set PC, .return
+    
+.error_no_drive:
+    
+    ; Put the error message
+    SET PUSH, str_no_drive ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    set PC, .say_drive_and_return
+    
+.error_no_media:
+
+    ; Put the error message
+    SET PUSH, str_no_media ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .say_drive_and_return
+
+.error_write_protected:
+
+    ; Put the error message
+    SET PUSH, str_write_protected ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .say_drive_and_return
+
+.say_drive_and_return:
+    ; Put the drive letter
+    SET PUSH, B ; Arg 1: Character to print
+    ADD [SP], 0x41 ; Add to 'A'
+    SET PUSH, 1 ; Arg 2: move cursor
+    SET A, WRITE_CHAR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Put a colon and a newline
+    SET PUSH, str_colon ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+
+.error_unknown:
+
+    ; Put the error message
+    SET PUSH, str_unknown ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+.return:
+    ; Return
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+
+    
 
 ; We depend on bbfs
 #include <bbfs.asm>
@@ -532,6 +803,22 @@ str_version2:
     ASCIIZ "Copyright (C) APIGA AUTONOMICS"
 str_not_found:
     ASCIIZ ": Bad command or file name"
+str_bad_drive_letter:
+    ASCIIZ "Usage: FORMAT <DRIVELETTER>"
+str_no_drive:
+    ASCIIZ "No drive "
+str_no_media:
+    ASCIIZ "No media in drive "
+str_write_protected:
+    ASCIIZ "Write-protected disk in drive "
+str_unknown:
+    ASCIIZ "Unknown error"
+str_colon:
+    ASCIIZ ":"
+str_boot_filename:
+    ASCIIZ "BOOT.IMG"
+str_format_success:
+    ASCIIZ "Formatted drive "
     
 str_newline:
     ; TODO: ASCIIZ doesn't like empty strings in dasm
@@ -540,6 +827,8 @@ str_newline:
 ; Builtin names:
 str_builtin_ver:
     ASCIIZ "VER"
+str_builtin_format:
+    ASCIIZ "FORMAT"
 
 ; Builtins table
 ;
@@ -549,9 +838,21 @@ builtins_table:
     ; VER builtin
     DAT str_builtin_ver
     DAT shell_builtin_ver
+    ; FORMAT builtin
+    DAT str_builtin_format
+    DAT shell_builtin_format
     ; No more builtins
     DAT 0
     DAT 0
+    
+; Code for the bootloader
+bootloader_code:
+#include <bbfs_bootloader.asm>
+
+; Now our .org has been messed up, so we set non-const data up in high-ish
+; memory
+
+.org 0xd000
 
 ; Global vars
 ; Current drive number
@@ -563,6 +864,12 @@ file:
 ; Directory for scanning through
 directory:
     RESERVE BBFS_DIRECTORY_SIZEOF
+; Entry struct for accessing directories
+entry:
+    RESERVE BBFS_DIRENTRY_SIZEOF
+; Header for the filesystem
+header:
+    RESERVE BBFS_HEADER_SIZEOF
 ; String buffer for commands
 command_buffer:
     RESERVE SHELL_COMMAND_LINE_LENGTH
