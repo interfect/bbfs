@@ -452,6 +452,11 @@ shell_exec:
     ; Now [Z+1] is the null-terminated command name, and X points to the null-
     ; terminated argument string.
     
+    ; Skip empty commands
+    SET A, [Z+1]
+    IFE [A], 0
+        SET PC, .return
+    
     ; Compare command name against our builtin table.
     SET A, builtins_table
     
@@ -877,8 +882,7 @@ shell_builtin_dir:
     SET PUSH, directory ; Arg 1: directory
     SET PUSH, header ; Arg 2: BBFS_HEADER
     SET PUSH, B ; Arg 3: drive
-    ; Arg 4: sector
-    SET PUSH, [directory+BBFS_DIRECTORY_FILE+BBFS_FILE_START_SECTOR]
+    SET PUSH, BBFS_ROOT_DIRECTORY ; Arg 4: sector
     JSR bbfs_directory_open
     SET A, POP
     ADD SP, 3
