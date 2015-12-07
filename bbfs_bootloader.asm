@@ -125,7 +125,7 @@ ADD SP, 2
 SET PUSH, STATIC_DIRECTORY_BL ; Arg 1: BBFS_DIRECTORY
 SET PUSH, STATIC_HEADER_BL ; Arg 2: BBFS_HEADER
 SET PUSH, B ; Arg 3: drive number
-SET PUSH, 4 ; Arg 4: directory start sector (4 for root dir)
+SET PUSH, BBFS_ROOT_DIRECTORY ; Arg 4: directory start sector (4 for root dir)
 JSR bbfs_directory_open_bl
 ADD SP, 4
 

@@ -97,6 +97,13 @@ command_loop:
 ; shell_exec(*command, drive_number)
 ;   Try executing the command in the given buffer, by first going through
 ;   builtins and then out to the given disk for .COM files.
+; shell_open(*header, *file, *filename, create)
+;   Populate a header and a file object by opening the given file object on the
+;   appropriate drive (either the current one or one derived from a leading A:\
+;   in the filename). Clobbers the global directory and dirinfo space. If create
+;   is specified, creates the file if it can't be found. Returns an error code.
+; shell_resolve_drive(character)
+;   Turn a drive letter into a drive number, or 0xFFFF if a bad drive letter.
 
 ; Builtin functions (shell commands)
 ;
@@ -538,13 +545,13 @@ shell_builtin_ver:
     ; Ignore the arguments
     
     ; Print the version strings
-    SET PUSH, str_version1 ; Arg 1: string to print
+    SET PUSH, str_ver_version1 ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    SET PUSH, str_version2 ; Arg 1: string to print
+    SET PUSH, str_ver_version2 ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -722,7 +729,7 @@ shell_builtin_format:
 .error_bad_drive_letter:
     
     ; Put the error message
-    SET PUSH, str_bad_drive_letter ; Arg 1: string to print
+    SET PUSH, str_format_usage ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -786,7 +793,7 @@ shell_builtin_format:
 .error_unknown:
 
     ; Put the error message
-    SET PUSH, str_unknown ; Arg 1: string to print
+    SET PUSH, str_unknown_error ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -890,7 +897,7 @@ shell_builtin_dir:
         SET PC, .error_unknown
         
     ; Say we're listing the directory
-    SET PUSH, str_listing_directory
+    SET PUSH, str_dir_directory
     SET PUSH, 0 ; No newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -959,7 +966,7 @@ shell_builtin_dir:
 .error_bad_drive_letter:
     
     ; Put the error message
-    SET PUSH, str_bad_drive_letter ; Arg 1: string to print
+    SET PUSH, str_format_usage ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -1011,7 +1018,7 @@ shell_builtin_dir:
 
 .error_unknown:
     ; Put the generic error message
-    SET PUSH, str_unknown ; Arg 1: string to print
+    SET PUSH, str_unknown_error ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -1025,6 +1032,529 @@ shell_builtin_dir:
     
 ; shell_builtin_copy(*arguments)
 ; Copy file to file, with drive letter support.
+; [Z]: argument string
+shell_builtin_copy:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls/scratch
+    SET PUSH, B ; Address of the 1-word stack buffer
+    SET PUSH, C ; Second file name
+    SUB SP, 1 ; Allocate a 1-word buffer on the stack
+    SET B, SP ; Point to it
+
+    ; Parse the command line
+    ; Split out the first filename
+    
+    SET C, [Z] ; Start at the start of the first filename
+    
+.parse_nonspaces_loop:
+    IFE [C], 0 ; No second filename
+        SET PC, .error_usage
+    IFE [C], 0x20 ; Found a space
+        SET PC, .parse_nonspaces_done
+        
+    ; Try the next character
+    ADD C, 1
+    SET PC, .parse_nonspaces_loop
+        
+.parse_nonspaces_done:
+    ; We found a space
+    ; Null it out to terminate the first filename.
+    SET [C], 0
+    ADD C, 1
+    ; Slide over all reamining spaces
+.parse_spaces_loop:
+    IFE [C], 0 ; No second filename
+        SET PC, .error_usage
+    IFN [C], 0x20 ; Found a space
+        SET PC, .parse_spaces_done
+        
+    ; Try the next character
+    ADD C, 1
+    SET PC, .parse_spaces_loop
+    
+.parse_spaces_done:
+    ; Now we found the start of the second filename.
+    ; But we want to go out and null out the first space after it, if any.
+    SET A, C
+    
+.parse_second_filename_loop:
+    IFE [A], 0
+        ; We hit the end and found no spaces
+        SET PC, .parse_second_filename_done
+    IFE [A], 0x20
+        ; We found a trailing space
+        SET PC, .parse_second_filename_done
+    
+    ; Try the next character
+    ADD A, 1
+    SET PC, .parse_second_filename_loop
+    
+.parse_second_filename_done:
+    ; Zero out this character, which may be a space
+    SET [A], 0
+    
+    ; We have now parsed our arguments
+    
+    ; Open the first file, not creating
+    ; shell_open(*header, *file, *filename, create)
+    SET PUSH, header ; Arg 1: header to populate
+    SET PUSH, file ; Arg 2: file to populate
+    SET PUSH, [Z] ; Arg 3: unpacked filename string
+    SET PUSH, 0 ; Arg 4: create flag
+    JSR shell_open
+    SET A, POP
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Open the second file, creating
+    SET PUSH, header2 ; Arg 1: header to populate
+    SET PUSH, file2 ; Arg 2: file to populate
+    SET PUSH, C ; Arg 3: unpacked filename string
+    SET PUSH, 1 ; Arg 4: create flag
+    JSR shell_open
+    SET A, POP
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    IFE [file+BBFS_FILE_DRIVE], [file2+BBFS_FILE_DRIVE]
+        IFE [file+BBFS_FILE_START_SECTOR], [file2+BBFS_FILE_START_SECTOR]
+            ; We've opened the same file twice. We can't truncate it because
+            ; it's open. Just declare the copy done.
+            SET PC, .copy_done
+    
+    ; Truncate the second file (in case it existed already)
+    SET PUSH, file2 ; Arg 1: file to truncate
+    JSR bbfs_file_truncate
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    ; Until EOF, read a word from file 1 and write it to file 2. We do it by
+    ; word so we don't accidentally append garbage.
+.copy_loop:
+    ; Read from file 1
+    SET PUSH, file ; Arg 1: file
+    SET PUSH, B ; Arg 2: buffer
+    SET PUSH, 1 ; Arg 3: length
+    JSR bbfs_file_read
+    SET A, POP
+    ADD SP, 2
+    IFE A, BBFS_ERR_EOF
+        ; We hit EOF so we're done copying
+        SET PC, .copy_done
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Write to file 2
+    SET PUSH, file2 ; Arg 1: file
+    SET PUSH, B ; Arg 2: buffer
+    SET PUSH, 1 ; Arg 3: length
+    JSR bbfs_file_write
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+
+    ; Loop around and copy another word
+    SET PC, .copy_loop
+
+.copy_done:
+    ; We read and wrote all the words.
+    
+    ; Sync file 2
+    SET PUSH, file2 ; Arg 1: file to flush
+    JSR bbfs_file_flush
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; We were successful.
+    ; Print success.
+    SET PUSH, str_copy_copied ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, [Z] ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, str_copy_to ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, C ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+        
+.error_usage:
+    ; The user doesn't know how to run the command
+    ; Print usage.
+    
+    SET PUSH, str_copy_usage ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+
+.error_A:
+    ; We had an error, code is in A
+    ; TODO: attribute it to an operand
+    
+    ; Keep the error message string in B
+    SET B, str_unknown_error
+    
+    ; Override it if we can be more specific
+    IFE A, BBFS_ERR_NOTFOUND
+        SET B, str_copy_error_not_found
+    IFE A, BBFS_ERR_DRIVE
+        SET B, str_copy_error_drive
+    
+    ; Print the error
+    SET PUSH, B ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+.return:
+    ADD SP, 1 ; Deallocate 1-word buffer
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; shell_open(*header, *file, *filename, create)
+; Populate the given header and file by opening the given filename. Get drive
+; from filename if possible.
+; [Z+3]: BBFS_HEADER to populate
+; [Z+2]: BBFS_FILE to populate
+; [Z+1]: File name buffer. May have a leading drive like A: or A:\. May be
+; modified.
+; [Z] Flag for whether to create the file if it does not exist.
+; Returns: Error code in [Z]
+shell_open:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls/scratch
+    SET PUSH, B ; Drive number to use/scratch for parsing it
+    SET PUSH, C ; Actual file name start
+    
+    ; Find the actual filename start
+    SET C, [Z+1]
+
+.scan_drive_letter:
+    IFE [C], 0
+        ; We ran out of name too early
+        SET PC, .error_out_of_name
+    SET B, [C] ; Load up what may be the drive letter.
+    ADD C, 1
+.scan_colon:
+    ; If we had a drive letter, we should have a colon now.
+    IFN [C], 0x3A ; No colon
+        ; Parse it all as a filename
+        SET PC, .rescan_all_name
+    ADD C, 1
+.scan_slash:
+    IFE [C], 0x5C ; There's a backslash
+        ADD C, 1 ; Skip it
+    
+    ; We know we have the drive format, so try to resolve the drive
+    SET PUSH, B ; Arg: drive character
+    JSR shell_resolve_drive
+    SET B, POP ; Result: drive number or 0xFFFF
+    
+    IFE B, 0xFFFF
+        SET PC, .error_drive
+    
+    ; Read the name
+    SET PC, .scan_name
+        
+.rescan_all_name:
+    ; Start at the beginning again
+    SET C, [Z+1]
+    
+    ; Our drive should just be our current drive
+    SET B, [drive]
+  
+.scan_name:
+    ; The file name is at C.
+    
+    ; Make sure it's not empty
+    IFE [C], 0
+        SET PC, .error_out_of_name
+    
+    ; Scan it to make sure it's not bogus (no illegal characters, not too long)
+    SET A, C
+    
+.name_loop:
+    IFE [A], 0
+        ; We scanned the whole name
+        SET PC, .name_loop_done
+        
+    IFE [A], 0x3A ; No colons
+        SET PC, .error_bad_character
+        
+    IFE [A], 0x20 ; No spaces
+        SET PC, .error_bad_character
+        
+    IFE [A], 0x5C ; No backslashes
+        SET PC, .error_bad_character
+        
+    IFE [A], 0x2F ; No forward slashes either
+        SET PC, .error_bad_character
+        
+    ; TODO: ban more characters
+        
+    ; Check the next character
+    ADD A, 1
+    SET PC, .name_loop
+
+.name_loop_done:
+    ; Check the name length
+    SUB A, C
+    
+    IFL A, BBFS_FILENAME_BUFSIZE
+        ; Name will fit in a buffer
+        SET PC, .name_ok
+    
+    ; Otherwise the name is too long
+    SET PC, .error_name_too_long
+        
+.name_ok:
+    ; Now we have the drive number in B and an acceptable filename in C.
+    
+    ; Pack the filename
+    SET PUSH, C ; Arg 1: string to pack
+    SET PUSH, packed_filename ; Arg 2: place to pack it
+    JSR bbfs_filename_pack
+    ADD SP, 2
+    
+    ; Read the header for the drive. TODO: make a table of header addresses by
+    ; drive so we can re-use the same header when opening multiple files or
+    ; something. Right now you can get multiple headers for a drive and lose
+    ; data if you save the wrong one.
+    SET PUSH, B ; Arg 1: drive number
+    SET PUSH, [Z+3] ; Arg 2: BBFS_HEADER
+    JSR bbfs_drive_load
+    ADD SP, 2
+
+    ; Open the root directory
+    SET PUSH, directory ; Arg 1: BBFS_DIRECTORY
+    SET PUSH, [Z+3] ; Arg 2: BBFS_HEADER
+    SET PUSH, B ; Arg 3: drive number
+    SET PUSH, BBFS_ROOT_DIRECTORY ; Arg 4: directory start sector
+    JSR bbfs_directory_open
+    SET A, POP
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+.dir_entry_loop:
+    ; Read the next entry
+    SET PUSH, directory
+    SET PUSH, entry
+    JSR bbfs_directory_next
+    SET A, POP
+    ADD SP, 1
+    IFE A, BBFS_ERR_EOF
+        ; We didn't find our file
+        SET PC, .file_not_found
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Compare filenames
+    SET PUSH, entry ; Arg 1: first packed name
+    ADD [SP], BBFS_DIRENTRY_NAME
+    SET PUSH, packed_filename ; Arg 2: second packed name
+    JSR bbfs_filename_compare
+    SET A, POP
+    ADD SP, 1
+    IFE A, 1
+        ; We found it
+        SET PC, .file_found
+        
+    ; Otherwise keep looking
+    SET PC, .dir_entry_loop
+
+.file_not_found:
+    ; The file wasn't found. Should we create it?
+    IFE [Z], 0
+        ; Don't create it
+        SET PC, .error_not_found
+    
+    ; Otherwise, open it on the disk.
+    SET PUSH, [Z+2] ; Arg 1: file
+    SET PUSH, [Z+3] ; Arg 2: header
+    SET PUSH, B ; Arg 3: drive
+    JSR bbfs_file_create
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    ; Prepare a directory entry for it
+    SET [entry+BBFS_DIRENTRY_TYPE], BBFS_TYPE_FILE
+    SET A, [Z+2]
+    SET [entry+BBFS_DIRENTRY_SECTOR], [A+BBFS_FILE_START_SECTOR]
+    ; Pack in the filename again (easier than copying)
+    SET PUSH, C ; Arg 1: string to pack
+    SET PUSH, entry ; Arg 2: place to pack it
+    ADD [SP], BBFS_DIRENTRY_NAME
+    JSR bbfs_filename_pack
+    ADD SP, 2
+        
+    ; Add it to the directory
+    SET PUSH, directory
+    SET PUSH, entry
+    JSR bbfs_directory_append
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; We succeeded
+    SET [Z], BBFS_ERR_NONE
+    SET PC, .return
+    
+    
+.file_found:
+    ; We found the file's directory entry. Open the file.
+    SET PUSH, [Z+2] ; Arg 1: file to open into
+    SET PUSH, [Z+3] ; Arg 2: FS header
+    SET PUSH, B ; Arg 3: drive to read from
+    SET PUSH, [entry+BBFS_DIRENTRY_SECTOR] ; Arg 4: sector to start at
+    JSR bbfs_file_open
+    SET A, POP
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A 
+
+    ; We succeeded
+    SET [Z], BBFS_ERR_NONE
+    SET PC, .return
+
+.error_out_of_name:
+    ; Name string was empty
+    SET [Z], BBFS_ERR_INVALID
+    SET PC, .return
+.error_bad_character:
+    ; Illegal character in filename
+    SET [Z], BBFS_ERR_INVALID
+    SET PC, .return
+.error_name_too_long:
+    ; Name was too long to pack
+    SET [Z], BBFS_ERR_INVALID
+    SET PC, .return
+.error_not_found:
+    ; File was not found under name
+    SET [Z], BBFS_ERR_NOTFOUND
+    SET PC, .return
+.error_drive:
+    ; Drive letter was bad
+    SET [Z], BBFS_ERR_DRIVE
+    SET PC, .return
+.error_A:
+    ; Some lower error we're passing up
+    SET [Z], A
+.return:
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; shell_resolve_drive(character)
+; Turn a character like A or B into a drive number, or 0xFFFF if no drive is
+; found.
+; [Z]: Drive character
+; Returns: BBOS drive number in [Z]
+shell_resolve_drive:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls
+    SET PUSH, B ; Drive number
+    
+    ; If it's in the lower-case ASCII range, upper-case it
+    IFL B, 0x7B
+        IFG B, 0x60
+            SUB B, 32
+            
+    IFL B, 0x41
+        ; 'A' is the first valid drive letter
+        SET PC, .error
+        
+    IFG B, 0x5A
+        ; 'Z' is the last possible drive letter
+        SET PC, .error
+        
+    ; Convert from drive letter to drive number.
+    SUB B, 0x41
+    
+    ; Get the drive count from BBOS
+    SUB SP, 1
+    SET A, GET_DRIVE_COUNT
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    SUB A, 1 ; We know we have 1 drive, so knock this down to (probably) 7
+    IFG B, A
+        ; We're out of bounds wrt the drives installed
+        SET PC, .error
+        
+    ; Now check to make sure there's a writable disk
+    SET PUSH, B
+    SET A, CHECK_DRIVE_STATUS
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    ; Shift down to have only the high (status) octet
+    SHR A, 8
+    
+    ; Check to make sure we're status ready
+    IFE A, STATE_NO_MEDIA
+        SET PC, .error
+        
+    ; TODO: should we do more checking?
+    
+    ; Return the drive number
+    SET [Z], B
+    SET PC, .return
+    
+.error:
+    ; Say we couldn't find the drive
+    SET [Z], 0xFFFF
+    ; TODO: messages?
+.return:
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
     
 
 ; We depend on bbfs
@@ -1035,13 +1565,13 @@ str_ready:
     ASCIIZ "DC-DOS 1.0 Ready"
 str_prompt:
     ASCIIZ ":\\> "
-str_version1:
+str_ver_version1:
     ASCIIZ "DC-DOS Command Interpreter 1.0"
-str_version2:
+str_ver_version2:
     ASCIIZ "Copyright (C) UBM Corporation"
 str_not_found:
     ASCIIZ ": Bad command or file name"
-str_bad_drive_letter:
+str_format_usage:
     ASCIIZ "Usage: FORMAT <DRIVELETTER>"
 str_no_drive:
     ASCIIZ "No drive "
@@ -1049,7 +1579,7 @@ str_no_media:
     ASCIIZ "No media in drive "
 str_write_protected:
     ASCIIZ "Write-protected disk in drive "
-str_unknown:
+str_unknown_error:
     ASCIIZ "Unknown error"
 str_colon:
     ASCIIZ ":"
@@ -1057,8 +1587,18 @@ str_boot_filename:
     ASCIIZ "BOOT.IMG"
 str_format_success:
     ASCIIZ "Formatted drive "
-str_listing_directory:
+str_dir_directory:
     ASCIIZ "Directory listing of "
+str_copy_copied:
+    ASCIIZ "Copied "
+str_copy_to:
+    ASCIIZ " to "
+str_copy_usage:
+    ASCIIZ "Usage: COPY <FILE1> <FILE2>"
+str_copy_error_not_found:
+    ASCIIZ "File not found"
+str_copy_error_drive:
+    ASCIIZ "Drive invalid"
     
 str_newline:
     ; TODO: ASCIIZ doesn't like empty strings in dasm
@@ -1071,6 +1611,8 @@ str_builtin_format:
     ASCIIZ "FORMAT"
 str_builtin_dir:
     ASCIIZ "DIR"
+str_builtin_copy:
+    ASCIIZ "COPY"
 
 ; Builtins table
 ;
@@ -1086,6 +1628,9 @@ builtins_table:
     ; DIR builtin
     DAT str_builtin_dir
     DAT shell_builtin_dir
+    ; COPY builtin
+    DAT str_builtin_copy
+    DAT shell_builtin_copy
     ; No more builtins
     DAT 0
     DAT 0
@@ -1125,6 +1670,8 @@ packed_filename:
 filename:
     RESERVE BBFS_FILENAME_BUFSIZE
 ; We sometimes need two files
+header2:
+    RESERVE BBFS_HEADER_SIZEOF
 file2:
     RESERVE BBFS_FILE_SIZEOF
     

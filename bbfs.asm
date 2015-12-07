@@ -123,8 +123,9 @@ define BBFS_ERR_DRIVE               0x0005
 define BBFS_ERR_DISC_FULL           0x0007
 define BBFS_ERR_EOF                 0x0008
 define BBFS_ERR_UNKNOWN             0x0009
-define BBFS_ERR_NOTDIR              0x1001
-define BBFS_ERR_NOTFOUND            0x1002
+define BBFS_ERR_NOTDIR              0x1001 ; Directory file wasn't a directory
+define BBFS_ERR_NOTFOUND            0x1002 ; No file at given sector/name 
+define BBFS_ERR_INVALID             0x1003 ; Name or other parameters invalid
 
 ; Directory constants
 define BBFS_TYPE_DIRECTORY 0
