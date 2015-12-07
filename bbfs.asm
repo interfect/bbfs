@@ -231,6 +231,7 @@ define BBFS_ROOT_DIRECTORY 4
 ;
 ; bbfs_filename_compare(*packed1, *packed2)
 ;   Compare two 8-word packed filenames. Return 1 if they match, 0 otherwise.
+;   Performs case-insensitive comparison.
 
 
 ; BBOS dependency

@@ -635,6 +635,7 @@ bbfs_filename_unpack:
     
 ; bbfs_filename_compare(*packed1, *packed2)
 ; Return 1 if the packed filenames match, 0 otherwise.
+; Performs case-insensitive comparison
 ; [Z+1]: Filename 1
 ; [Z]: Filename 2
 ; Return: 1 for match or 0 for mismatch in [Z]
@@ -646,14 +647,51 @@ bbfs_filename_compare:
     SET PUSH, A ; Filename 1 addressing
     SET PUSH, B ; Filename 2 addressing
     SET PUSH, C ; Character counter
+    SET PUSH, X ; Filename 1 character
+    SET PUSH, Y ; Filename 2 character
     
     SET A, [Z+1] ; Load string 1
     SET B, [Z] ; And string 2
     
     SET C, 0
 .loop:
-    IFN [A], [B]
+    ; Unpack character 1 from filename 1
+    SET X, [A]
+    SHR X, 8
+    
+    IFG X, 0x60 ; If it's greater than ` (char before a)
+        IFL X, 0x7B ; And less than { (char after z)
+            SUB X, 32 ; Knock it down to upper case
+            
+    ; Also character 1 from filename 2
+    SET Y, [B]
+    SHR Y, 8
+    
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
+
+    IFN X, Y
         SET PC, .unequal
+        
+    ; And character 2 from each
+    SET X, [A]
+    AND X, 0xFF
+    
+    IFG X, 0x60 ; If it's greater than ` (char before a)
+        IFL X, 0x7B ; And less than { (char after z)
+            SUB X, 32 ; Knock it down to upper case
+            
+    SET Y, [B]
+    AND Y, 0xFF
+    
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
+
+    IFN X, Y
+        SET PC, .unequal
+        
     ADD A, 1
     ADD B, 1
     ADD C, 1
@@ -667,6 +705,8 @@ bbfs_filename_compare:
 .unequal:
     SET [Z], 0
 .return:
+    SET Y, POP
+    SET X, POP
     SET C, POP
     SET B, POP
     SET A, POP
