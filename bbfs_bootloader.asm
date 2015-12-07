@@ -588,9 +588,9 @@ str_not_found_bl:
 str_found_bl:
     ASCIIZ "Loading BOOT.IMG"
 str_intro_bl:
-    ASCIIZ "BBFSBoot 0.1"
+    ASCIIZ "UBM Bootloader 2.0"
 str_copyright_bl:
-    ASCIIZ "(C) APIGA AUTONOMICS"
+    ASCIIZ "(C) UBM"
 str_jump_bl:
     ASCIIZ "Launching"
 str_error_bl:

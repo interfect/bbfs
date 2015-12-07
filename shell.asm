@@ -110,6 +110,10 @@ command_loop:
 ;
 ; shell_builtin_format(*arguments)
 ;   Format the disk in the drive with the given letter as bootable.
+;
+; shell_builtin_dir(*arguments)
+;   List the files in the root directory on the current drive
+
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -787,6 +791,117 @@ shell_builtin_format:
     SET Z, POP
     SET PC, POP
 
+; shell_builtin_dir(*arguments)
+; List the files on the current drive
+; [Z]: argument string
+shell_builtin_dir:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls/scratch
+    SET PUSH, B ; Drive number
+    
+    SET B, [drive] ; Load the drive number
+
+    ; Load the header
+    SET PUSH, B ; Arg 1: drive number
+    SET PUSH, header ; Arg 2: header to populate
+    JSR bbfs_drive_load
+    ADD SP, 2
+    ; Open the directory
+    SET PUSH, directory ; Arg 1: directory
+    SET PUSH, header ; Arg 2: BBFS_HEADER
+    SET PUSH, B ; Arg 3: drive
+    ; Arg 4: sector
+    SET PUSH, [directory+BBFS_DIRECTORY_FILE+BBFS_FILE_START_SECTOR]
+    JSR bbfs_directory_open
+    SET A, POP
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error
+        
+    ; Say we're listing the directory
+    SET PUSH, str_listing_directory
+    SET PUSH, 0 ; No newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Put the drive letter
+    SET PUSH, B ; Arg 1: Character to print
+    ADD [SP], 0x41 ; Add to 'A'
+    SET PUSH, 1 ; Arg 2: move cursor
+    SET A, WRITE_CHAR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Put a colon and a newline
+    SET PUSH, str_colon ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Read entries out
+.dir_entry_loop:
+    ; Read the next entry
+    SET PUSH, directory
+    SET PUSH, entry
+    JSR bbfs_directory_next
+    SET A, POP
+    ADD SP, 1
+    IFE A, BBFS_ERR_EOF
+        ; If we have run out, stop looping
+        SET PC, .dir_entry_loop_done
+    IFN A, BBFS_ERR_NONE
+        ; On any other error, fail
+        SET PC, .error
+    
+    ; Unpack the filename
+    SET PUSH, filename ; Arg 1: unpacked filename
+    SET PUSH, entry ; Arg 2: packed filename
+    ADD [SP], BBFS_DIRENTRY_NAME
+    JSR bbfs_filename_unpack
+    ADD SP, 2
+    
+    ; TODO: split into name and extension
+    
+    ; TODO: lay out nicely
+    
+    ; TODO:Destinguish directories
+    
+    ; Print the filename
+    SET PUSH, filename
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Loop until EOF
+    SET PC, .dir_entry_loop
+    
+.dir_entry_loop_done:
+    ; We listed all the files.
+    
+    ; TODO: print totals here
+    
+    SET PC, .return
+
+.error:
+    ; Print a message
+    SET PUSH, str_unknown
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+
+.return:
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
     
 
 ; We depend on bbfs
@@ -794,13 +909,13 @@ shell_builtin_format:
 
 ; Strings
 str_ready:
-    ASCIIZ "BB-DOS 1.0 Ready"
+    ASCIIZ "DC-DOS 1.0 Ready"
 str_prompt:
-    ASCIIZ ":/> "
+    ASCIIZ ":\\> "
 str_version1:
-    ASCIIZ "BB-DOS Command Interpreter 1.0"
+    ASCIIZ "DC-DOS Command Interpreter 1.0"
 str_version2:
-    ASCIIZ "Copyright (C) APIGA AUTONOMICS"
+    ASCIIZ "Copyright (C) UBM Corporation"
 str_not_found:
     ASCIIZ ": Bad command or file name"
 str_bad_drive_letter:
@@ -819,6 +934,8 @@ str_boot_filename:
     ASCIIZ "BOOT.IMG"
 str_format_success:
     ASCIIZ "Formatted drive "
+str_listing_directory:
+    ASCIIZ "Directory listing of "
     
 str_newline:
     ; TODO: ASCIIZ doesn't like empty strings in dasm
@@ -829,6 +946,8 @@ str_builtin_ver:
     ASCIIZ "VER"
 str_builtin_format:
     ASCIIZ "FORMAT"
+str_builtin_dir:
+    ASCIIZ "DIR"
 
 ; Builtins table
 ;
@@ -841,6 +960,9 @@ builtins_table:
     ; FORMAT builtin
     DAT str_builtin_format
     DAT shell_builtin_format
+    ; DIR builtin
+    DAT str_builtin_dir
+    DAT shell_builtin_dir
     ; No more builtins
     DAT 0
     DAT 0
@@ -876,4 +998,10 @@ command_buffer:
 ; Packed filename for looking through directories
 packed_filename:
     RESERVE BBFS_FILENAME_PACKED
+; And an unpacked finename
+filename:
+    RESERVE BBFS_FILENAME_BUFSIZE
+; We sometimes need two files
+file2:
+    RESERVE BBFS_FILE_SIZEOF
     
