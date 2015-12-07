@@ -112,8 +112,11 @@ command_loop:
 ;   Format the disk in the drive with the given letter as bootable.
 ;
 ; shell_builtin_dir(*arguments)
-;   List the files in the root directory on the current drive
-
+;   List the files in the root directory on the current or specified drive
+;
+; shell_builtin_copy(*arguments)
+;   Copies the file named with the first argument to the file named with the
+;   second argument. Filenames may be prefixed as <DRIVE>:\.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -563,7 +566,7 @@ shell_builtin_format:
     SET B, [Z]
     SET B, [B]
     
-    ; If it's in the upper-case ASCII range, lower-case it
+    ; If it's in the lower-case ASCII range, upper-case it
     IFL B, 0x7B
         IFG B, 0x60
             SUB B, 32
@@ -573,7 +576,7 @@ shell_builtin_format:
         SET PC, .error_bad_drive_letter
         
     IFG B, 0x5A
-        ; 'Z' is the first possible drive letter
+        ; 'Z' is the last possible drive letter
         SET PC, .error_bad_drive_letter
         
     ; Convert from drive letter to drive number.
@@ -779,7 +782,7 @@ shell_builtin_format:
 
     ; Put the error message
     SET PUSH, str_unknown ; Arg 1: string to print
-    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
@@ -803,8 +806,68 @@ shell_builtin_dir:
     SET PUSH, A ; BBOS calls/scratch
     SET PUSH, B ; Drive number
     
+    ; Try and read a drive number from the argument string
+    SET B, [Z]
+    SET B, [B]
+    
+    IFE B, 0
+        ; No drive number was specified. Fill in the current drive.
+        SET PC, .current_drive
+    
+    ; If it's in the lower-case ASCII range, upper-case it
+    IFL B, 0x7B
+        IFG B, 0x60
+            SUB B, 32
+            
+    IFL B, 0x41
+        ; 'A' is the first valid drive letter
+        SET PC, .error_bad_drive_letter
+        
+    IFG B, 0x5A
+        ; 'Z' is the last possible drive letter
+        SET PC, .error_bad_drive_letter
+        
+    ; Convert from drive letter to drive number.
+    SUB B, 0x41
+    
+    ; Get the drive count from BBOS
+    SUB SP, 1
+    SET A, GET_DRIVE_COUNT
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    SUB A, 1 ; We know we have 1 drive, so knock this down to (probably) 7
+    IFG B, A
+        ; We're out of bounds wrt the drives installed
+        SET PC, .error_no_drive
+        
+    ; Now check to make sure there's a writable disk
+    SET PUSH, B
+    SET A, CHECK_DRIVE_STATUS
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    ; Shift down to have only the high (status) octet
+    SHR A, 8
+    
+    ; Check to make sure we're status ready
+    IFE A, STATE_NO_MEDIA
+        SET PC, .error_no_media
+        
+    IFE A, STATE_READY_WP
+        SET PC, .drive_ready
+    
+    IFE A, STATE_READY
+        SET PC, .drive_ready
+        
+    ; If it's in a bad state, say we have an unknown error.
+    SET PC, .error_unknown
+    
+.current_drive:
+    ; Just use the current drive
     SET B, [drive] ; Load the drive number
-
+.drive_ready:
+    
     ; Load the header
     SET PUSH, B ; Arg 1: drive number
     SET PUSH, header ; Arg 2: header to populate
@@ -820,7 +883,7 @@ shell_builtin_dir:
     SET A, POP
     ADD SP, 3
     IFN A, BBFS_ERR_NONE
-        SET PC, .error
+        SET PC, .error_unknown
         
     ; Say we're listing the directory
     SET PUSH, str_listing_directory
@@ -857,7 +920,7 @@ shell_builtin_dir:
         SET PC, .dir_entry_loop_done
     IFN A, BBFS_ERR_NONE
         ; On any other error, fail
-        SET PC, .error
+        SET PC, .error_unknown
     
     ; Unpack the filename
     SET PUSH, filename ; Arg 1: unpacked filename
@@ -888,11 +951,64 @@ shell_builtin_dir:
     ; TODO: print totals here
     
     SET PC, .return
+    
+.error_bad_drive_letter:
+    
+    ; Put the error message
+    SET PUSH, str_bad_drive_letter ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Don't try and say the bad drive letter.
+    set PC, .return
+    
+.error_no_drive:
+    
+    ; Put the error message
+    SET PUSH, str_no_drive ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    set PC, .say_drive_and_return
+    
+.error_no_media:
 
-.error:
-    ; Print a message
-    SET PUSH, str_unknown
-    SET PUSH, 1 ; With newline
+    ; Put the error message
+    SET PUSH, str_no_media ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .say_drive_and_return
+
+.say_drive_and_return:
+    ; Put the drive letter
+    SET PUSH, B ; Arg 1: Character to print
+    ADD [SP], 0x41 ; Add to 'A'
+    SET PUSH, 1 ; Arg 2: move cursor
+    SET A, WRITE_CHAR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Put a colon and a newline
+    SET PUSH, str_colon ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+
+.error_unknown:
+    ; Put the generic error message
+    SET PUSH, str_unknown ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
@@ -902,6 +1018,9 @@ shell_builtin_dir:
     SET A, POP
     SET Z, POP
     SET PC, POP
+    
+; shell_builtin_copy(*arguments)
+; Copy file to file, with drive letter support.
     
 
 ; We depend on bbfs
