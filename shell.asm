@@ -508,8 +508,33 @@ shell_exec:
 .not_a_builtin:
     ; TODO: see if we said "B:" and if so switch to that drive.
 
+    SET Y, [Z+1] ; Start at the start of the string
+    ADD Y, 1 ; Look at the second character
+   
+    IFN [Y], 0x3A ; They did <char>:
+        SET PC, .not_a_drive
+    
+    ; They may be asking for a drive
+    ; Grab the letter
+    SET Y, [Z+1] ; Look at the start of the string again
+    SET Y, [Y]
+    
+    SET PUSH, Y
+    JSR shell_resolve_drive
+    SET Y, POP
+    
+    IFE Y, 0xFFFF
+        ; We couldn't resolve the drive letter
+        SET PC, .error_bad_drive
+        
+    ; If we could, go to that drive
+    SET [drive], Y
+    SET PC, .return
+    
+.not_a_drive:
     ; TODO: search the disk.
     
+.error_bad_command:
     ; Say we couldn't find the command.
     ; Start with the parsed command name
     SET PUSH, [Z+1] ; Arg 1: string to print
@@ -520,6 +545,16 @@ shell_exec:
     
     ; Then say we couldn't find it
     SET PUSH, str_not_found ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_bad_drive:
+    ; Say we couldn't find the specified drive
+    SET PUSH, str_error_drive ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -1634,6 +1669,8 @@ shell_resolve_drive:
     SET PUSH, A ; BBOS calls
     SET PUSH, B ; Drive number
     
+    SET B, [Z] ; Load the drive number
+    
     ; If it's in the lower-case ASCII range, upper-case it
     IFL B, 0x7B
         IFG B, 0x60
@@ -1696,11 +1733,11 @@ shell_resolve_drive:
 
 ; Strings
 str_ready:
-    ASCIIZ "DC-DOS 1.0 Ready"
+    ASCIIZ "DC-DOS 1.1 Ready"
 str_prompt:
     ASCIIZ ":\\> "
 str_ver_version1:
-    ASCIIZ "DC-DOS Command Interpreter 1.0"
+    ASCIIZ "DC-DOS Command Interpreter 1.1"
 str_ver_version2:
     ASCIIZ "Copyright (C) UBM Corporation"
 str_not_found:
