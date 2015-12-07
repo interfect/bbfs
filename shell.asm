@@ -124,6 +124,9 @@ command_loop:
 ; shell_builtin_copy(*arguments)
 ;   Copies the file named with the first argument to the file named with the
 ;   second argument. Filenames may be prefixed as <DRIVE>:\.
+;
+; shell_builtin_del(*arguments)
+;   Delete file, with drive letter support as in COPY above.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -793,7 +796,7 @@ shell_builtin_format:
 .error_unknown:
 
     ; Put the error message
-    SET PUSH, str_unknown_error ; Arg 1: string to print
+    SET PUSH, str_error_unknown ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -1018,7 +1021,7 @@ shell_builtin_dir:
 
 .error_unknown:
     ; Put the generic error message
-    SET PUSH, str_unknown_error ; Arg 1: string to print
+    SET PUSH, str_error_unknown ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
     INT BBOS_IRQ_MAGIC
@@ -1220,13 +1223,13 @@ shell_builtin_copy:
     ; TODO: attribute it to an operand
     
     ; Keep the error message string in B
-    SET B, str_unknown_error
+    SET B, str_error_unknown
     
     ; Override it if we can be more specific
     IFE A, BBFS_ERR_NOTFOUND
-        SET B, str_copy_error_not_found
+        SET B, str_error_not_found
     IFE A, BBFS_ERR_DRIVE
-        SET B, str_copy_error_drive
+        SET B, str_error_drive
     
     ; Print the error
     SET PUSH, B ; Arg 1: string to print
@@ -1243,6 +1246,127 @@ shell_builtin_copy:
     SET Z, POP
     SET PC, POP
     
+; shell_builtin_del(*arguments)
+; Delete file, with drive letter support.
+; [Z]: argument string
+shell_builtin_del:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls/scratch
+    SET PUSH, B ; Directory entry number of file
+
+    ; Parse the command line
+    ; Split out the first filename
+    
+    SET A, [Z] ; Start at the start of the first filename
+    
+    IFE [A], 0
+        ; They gave no filename at all
+        SET PC, .error_usage
+    
+.parse_nonspaces_loop:
+    IFE [A], 0 ; We hit the end of the filename and got a null
+        SET PC, .parse_nonspaces_done
+    IFE [A], 0x20 ; Found a space
+        SET PC, .parse_nonspaces_done
+        
+    ; Try the next character
+    ADD A, 1
+    SET PC, .parse_nonspaces_loop
+        
+.parse_nonspaces_done:
+    ; We found what may be a space after the filename
+    ; Null it out to terminate the first filename.
+    SET [A], 0
+    
+    ; We have now parsed our arguments
+    
+    ; Open the file, not creating
+    ; shell_open(*header, *file, *filename, create)
+    SET PUSH, header ; Arg 1: header to populate
+    SET PUSH, file ; Arg 2: file to populate
+    SET PUSH, [Z] ; Arg 3: unpacked filename string
+    SET PUSH, 0 ; Arg 4: create flag
+    JSR shell_open
+    SET A, POP ; Read error code
+    SET B, POP ; Read second return value: index file is at in global directory
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    ; Delete the file from the disk
+    SET PUSH, file
+    JSR bbfs_file_delete
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    ; Unlink the file from the global directory
+    SET PUSH, directory ; Arg 1: BBFS_DIRECTORY to operate on
+    SET PUSH, B ; Arg 2: index of file to remove
+    JSR bbfs_directory_remove
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; We were successful.
+    ; Print success.
+    SET PUSH, str_del_deleted ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, [Z] ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+        
+.error_usage:
+    ; The user doesn't know how to run the command
+    ; Print usage.
+    
+    SET PUSH, str_del_usage ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+
+.error_A:
+    ; We had an error, code is in A
+
+    ; Keep the error message string in B
+    SET B, str_error_unknown
+    
+    ; Override it if we can be more specific
+    IFE A, BBFS_ERR_NOTFOUND
+        SET B, str_error_not_found
+    IFE A, BBFS_ERR_DRIVE
+        SET B, str_error_drive
+    
+    ; Print the error
+    SET PUSH, B ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+.return:
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
 ; shell_open(*header, *file, *filename, create)
 ; Populate the given header and file by opening the given filename. Get drive
 ; from filename if possible.
@@ -1251,7 +1375,9 @@ shell_builtin_copy:
 ; [Z+1]: File name buffer. May have a leading drive like A: or A:\. May be
 ; modified.
 ; [Z] Flag for whether to create the file if it does not exist.
-; Returns: Error code in [Z]
+; Returns: Error code in [Z], index of file in directory in [Z+1]
+; Side effect: leaves global directory open to the file's directory.
+; TODO: make it be passed in by argument or something.
 shell_open:
     ; Set up frame pointer
     SET PUSH, Z
@@ -1261,6 +1387,7 @@ shell_open:
     SET PUSH, A ; BBOS calls/scratch
     SET PUSH, B ; Drive number to use/scratch for parsing it
     SET PUSH, C ; Actual file name start
+    SET PUSH, X ; Index in directory
     
     ; Find the actual filename start
     SET C, [Z+1]
@@ -1372,6 +1499,8 @@ shell_open:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
+    SET X, 0 ; Keep track of the entry we find it in
+        
 .dir_entry_loop:
     ; Read the next entry
     SET PUSH, directory
@@ -1395,6 +1524,10 @@ shell_open:
     IFE A, 1
         ; We found it
         SET PC, .file_found
+
+    ; Say it's in the next entry (which will be past the current end if we have
+    ; to create it)
+    ADD X, 1 
         
     ; Otherwise keep looking
     SET PC, .dir_entry_loop
@@ -1439,7 +1572,6 @@ shell_open:
     SET [Z], BBFS_ERR_NONE
     SET PC, .return
     
-    
 .file_found:
     ; We found the file's directory entry. Open the file.
     SET PUSH, [Z+2] ; Arg 1: file to open into
@@ -1480,6 +1612,8 @@ shell_open:
     ; Some lower error we're passing up
     SET [Z], A
 .return:
+    SET [Z+1], X ; Return the index we found, if any
+    SET X, POP
     SET C, POP
     SET B, POP
     SET A, POP
@@ -1579,7 +1713,7 @@ str_no_media:
     ASCIIZ "No media in drive "
 str_write_protected:
     ASCIIZ "Write-protected disk in drive "
-str_unknown_error:
+str_error_unknown:
     ASCIIZ "Unknown error"
 str_colon:
     ASCIIZ ":"
@@ -1595,10 +1729,14 @@ str_copy_to:
     ASCIIZ " to "
 str_copy_usage:
     ASCIIZ "Usage: COPY <FILE1> <FILE2>"
-str_copy_error_not_found:
+str_error_not_found:
     ASCIIZ "File not found"
-str_copy_error_drive:
+str_error_drive:
     ASCIIZ "Drive invalid"
+str_del_usage:
+    ASCIIZ "Usage: DEL <FILE>"
+str_del_deleted:
+    ASCIIZ "Deleted "
     
 str_newline:
     ; TODO: ASCIIZ doesn't like empty strings in dasm
@@ -1613,6 +1751,8 @@ str_builtin_dir:
     ASCIIZ "DIR"
 str_builtin_copy:
     ASCIIZ "COPY"
+str_builtin_del:
+    ASCIIZ "DEL"
 
 ; Builtins table
 ;
@@ -1631,6 +1771,9 @@ builtins_table:
     ; COPY builtin
     DAT str_builtin_copy
     DAT shell_builtin_copy
+    ; DEL builtin
+    DAT str_builtin_del
+    DAT shell_builtin_del
     ; No more builtins
     DAT 0
     DAT 0
