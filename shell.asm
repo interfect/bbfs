@@ -42,7 +42,7 @@ define SHELL_COMMAND_LINE_LENGTH 128
 ; minus extension.
 define SHELL_COMMAND_LENGTH 13
 
-; Where si the root directory on a BBFS disk? TODO: restructure bbfs includes to
+; Where is the root directory on a BBFS disk? TODO: restructure bbfs includes to
 ; make it so we can just use the bbfs defines.
 define BBFS_ROOT_DIRECTORY 4
 
@@ -50,11 +50,61 @@ define BBFS_ROOT_DIRECTORY 4
 define BBOS_BOOTLOADER_MAGIC 0x55AA
 define BBOS_BOOTLOADER_MAGIC_POSITION 511
 
+; We want to load the shell code into high memory, so that if we want to load
+; another binary off of a disk, we can fit one of a decent size before it starts
+; to overwrite the routines trying to load it.
+
+; BBOS likes to load at 0xF000. If we could relocate ourselves, we could just
+; ask it where to load.
+
+; This leaves us 8k for code above, and 45k for user/loaded code below.
+define SHELL_CODE_START 0xB000 
+
+; This leaves us a bit under 8k for data and BBOS's VRAM. We have like 5k with
+; all those sector buffers.
+define SHELL_DATA_START 0xD000
+
+; TODO: develop a bank switching peripheral to swap out 8k banks or something.
+
+zero:
+    ; Here we have some simple code to move the rest up to high memory
+    
+    SET I, moveable_start ; This is where we find the code to move
+    SET J, start ; This is where it goes
+    ; Calculate (at assembly time) how many words to copy
+    SET C, bootloader_code+BBFS_WORDS_PER_SECTOR-start
+    
+.copy_loop:
+    ; Copy all the words up into higher memory
+    STI [J], [I]
+    SUB C, 1
+    IFN C, 0
+        SET PC, .copy_loop
+        
+    ; Jump to the code we just moved into place
+    SET PC, start
+    
+moveable_start: ; This is where we read our real code from
+    
+.org SHELL_CODE_START
+
 start:
+    ; Now we're running in place.
+
+    ; Save the code that just moved us, in case we need it for format.
+    SET I, zero
+    SET J, format_copyloader
+    SET C, moveable_start-zero
+.copy_loop:
+    STI [J], [I]
+    SUB C, 1
+    IFN C, 0
+        SET PC, .copy_loop
+
     ; The drive we loaded off of is in A.
     SET [drive], A
-
-    ; Print the intro
+    
+     ; Print the intro
     SET PUSH, str_ready ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
@@ -127,6 +177,11 @@ command_loop:
 ;
 ; shell_builtin_del(*arguments)
 ;   Delete file, with drive letter support as in COPY above.
+;
+; shell_builtin_load(*arguments)
+;   Load a file at address 0 and execute it. Loaded code can try returning with
+;   a SET PC, POP if it didn't clobber our memory, in which case this function
+;   returns 1. If the file could not be loaded, this function returns 0.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -511,8 +566,15 @@ shell_exec:
     SET Y, [Z+1] ; Start at the start of the string
     ADD Y, 1 ; Look at the second character
    
-    IFN [Y], 0x3A ; They did <char>:
+    IFN [Y], 0x3A ; Not a drive if it's not <char>:
         SET PC, .not_a_drive
+    IFE [Y+1], 0x20 ; Catch "A: "
+        SET PC, .is_a_drive
+    IFE [Y+1], 0 ; Catch "A:"
+        SET PC, .is_a_drive
+    SET PC, .not_a_drive
+    
+.is_a_drive:
     
     ; They may be asking for a drive
     ; Grab the letter
@@ -532,7 +594,59 @@ shell_exec:
     SET PC, .return
     
 .not_a_drive:
-    ; TODO: search the disk.
+    
+    ; How long is the command?
+    SET A, [Z+1]
+    
+    ; Does this command contain an extension?
+    SET B, 0
+    
+.command_length_loop:
+    IFE [A], 0
+        SET PC, .command_length_done
+    IFE [A], 0x2E ; We found a dot
+        SET B, A ; Save its location
+    ADD A, 1
+    SET PC, .command_length_loop
+.command_length_done:
+    SUB A, [Z+1]
+    
+    IFN B, 0
+        ; We found an extension in the string.
+        SET PC, .try_load_with_extension
+    
+    ; TODO: try appending an extension and loading with that.
+    SET PC, .error_bad_command
+    
+.try_load_with_extension:
+    ; A is the filename length and B is the extension start
+    ; See if the extension is executable and if so load from disk.
+    
+    ; Do we have the .img extension?
+    SET PUSH, str_img_extension ; Arg 1: string 1
+    SET PUSH, B ; Arg 2: string 2
+    SET PUSH, 1 ; Arg 3: ignore case
+    SET PUSH, 4 ; Arg 4: number of characters (".IMG")
+    JSR shell_strncmp
+    SET Y, POP
+    ADD SP, 3
+    
+    IFE Y, 0
+        ; Not a loadable binary
+        SET PC, .error_bad_command
+    
+    ; If we get here, we can just load it with the filename in the command
+    ; buffer.
+    SET PUSH, [Z+1] ; Arg 1: filename string
+    JSR shell_builtin_load
+    SET Y, POP
+    
+    IFE Y, 0
+        ; We didn't load successfully
+        SET PC, .error_bad_command
+    
+    ; Otherwise we have finished running the program
+    SET PC, .return
     
 .error_bad_command:
     ; Say we couldn't find the command.
@@ -688,7 +802,7 @@ shell_builtin_format:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
     
-    ; Save a memory image to "BOOT.IMG"
+    ; Save a memory image to "BOOT.IMG" that will boot back to this code.
     ; Make a file
     
     SET PUSH, file ; Arg 1: file struct to populate
@@ -722,11 +836,21 @@ shell_builtin_format:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
     
-    ; Write the whole running program to the file.
+    ; Write the copy loader we moved up to high memory, so it can move us back
+    ; to high memory when we reload.
     SET PUSH, file ; Arg 1: file pointer to write to
-    SET PUSH, 0 ; Arg 2: start address (start of memory)
-    SET PUSH, bootloader_code ; Arg 3: words to write
-    ADD [SP], BBFS_WORDS_PER_SECTOR ; Add on the length of the bootloader.
+    SET PUSH, format_copyloader ; Arg 2: start address
+    SET PUSH, moveable_start-zero ; Arg 3: length
+    JSR bbfs_file_write
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+    
+    ; Write the actual program code
+    SET PUSH, file ; Arg 1: file pointer to write to
+    SET PUSH, start ; Arg 2: start address
+    SET PUSH, bootloader_code+BBFS_WORDS_PER_SECTOR-start ; Arg 3: length
     JSR bbfs_file_write
     SET A, POP
     ADD SP, 2
@@ -1727,17 +1851,143 @@ shell_resolve_drive:
     SET Z, POP
     SET PC, POP
     
+; shell_builtin_load(*arguments)
+; Load the file specified at address 0, and JSR there. Returns 1 if it ever
+; returns, and 0 if it could not be loaded.
+; [Z]: argument string beginning with a file name
+; Returns: success flag in [Z]
+shell_builtin_load:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls, scratch
+    SET PUSH, B ; Cursor for where we're reading to.
+    
+    ; Parse the command line
+    ; Split out the first filename
+    
+    SET A, [Z] ; Start at the start of the first filename
+    
+    IFE [A], 0
+        ; They gave no filename at all
+        SET PC, .error_usage
+    
+.parse_nonspaces_loop:
+    IFE [A], 0 ; We hit the end of the filename and got a null
+        SET PC, .parse_nonspaces_done
+    IFE [A], 0x20 ; Found a space
+        SET PC, .parse_nonspaces_done
+        
+    ; Try the next character
+    ADD A, 1
+    SET PC, .parse_nonspaces_loop
+        
+.parse_nonspaces_done:
+    ; We found what may be a space after the filename
+    ; Null it out to terminate the first filename.
+    SET [A], 0
+    
+    ; We have now parsed our arguments
+    
+    ; Open the file, not creating
+    ; shell_open(*header, *file, *filename, create)
+    SET PUSH, header ; Arg 1: header to populate
+    SET PUSH, file ; Arg 2: file to populate
+    SET PUSH, [Z] ; Arg 3: unpacked filename string
+    SET PUSH, 0 ; Arg 4: create flag
+    JSR shell_open
+    SET A, POP ; Read error code
+    ADD SP, 3
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Prepare to load
+    SET B, 0 ; Load at 0
+    
+.load_loop:
+    ; Read words from the file until EOF. Since we're guaranteed partial read
+    ; success when hitting the EOF, we can just read in big chunks.
+    SET PUSH, file ; Arg 1: file
+    SET PUSH, B ; Arg 2: buffer
+    SET PUSH, BBFS_WORDS_PER_SECTOR ; Arg 3: length
+    JSR bbfs_file_read
+    SET A, POP
+    ADD SP, 2
+    IFE A, BBFS_ERR_EOF
+        ; We hit EOF so we're done copying
+        SET PC, .load_done
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; If we get here, we succeeded but there's more to do.
+    ADD B, BBFS_WORDS_PER_SECTOR ; Write after what we just loaded
+    SET PC, .load_loop
+        
+.load_done:
+
+    ; Now we can save all the registers and then run the code
+    SET PUSH, A
+    SET PUSH, B
+    SET PUSH, C
+    SET PUSH, I
+    SET PUSH, J
+    SET PUSH, X
+    SET PUSH, Y
+    SET PUSH, Z
+    
+    ; Load the file's drive into A, just to be like the bootloader
+    SET A, [file+BBFS_FILE_DRIVE]
+    
+    ; Run the loaded code
+    JSR 0
+    
+    ; If we get back here, we know they didn't clobber the stack and actually
+    ; returned. Try and restore our state.
+    SET Z, POP
+    SET Y, POP
+    SET X, POP
+    SET J, POP
+    SET I, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    
+    SET [Z], 1 ; We succeeded in running a program
+    SET PC, .return
+ 
+.error_usage:
+    SET PUSH, str_load_usage ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET [Z], 0
+    SET PC, .return
+.error_A:
+    ; We did not successfuly load the file
+    SET [Z], 0
+    SET PC, .return
+.return:
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+    
 
 ; We depend on bbfs
 #include <bbfs.asm>
 
 ; Strings
 str_ready:
-    ASCIIZ "DC-DOS 1.1 Ready"
+    ASCIIZ "DC-DOS 1.2 Ready"
 str_prompt:
     ASCIIZ ":\\> "
 str_ver_version1:
-    ASCIIZ "DC-DOS Command Interpreter 1.1"
+    ASCIIZ "DC-DOS Command Interpreter 1.2"
 str_ver_version2:
     ASCIIZ "Copyright (C) UBM Corporation"
 str_not_found:
@@ -1774,6 +2024,13 @@ str_del_usage:
     ASCIIZ "Usage: DEL <FILE>"
 str_del_deleted:
     ASCIIZ "Deleted "
+str_load_usage:
+    ASCIIZ "Usage: LOAD <FILE>"
+str_img_extension: ; IMG binaries load at 0
+    ".IMG"
+str_com_extension: ; COM binaries will be a bit smarter probably.
+    ".COM"
+    
     
 str_newline:
     ; TODO: ASCIIZ doesn't like empty strings in dasm
@@ -1790,6 +2047,8 @@ str_builtin_copy:
     ASCIIZ "COPY"
 str_builtin_del:
     ASCIIZ "DEL"
+str_builtin_load:
+    ASCIIZ "LOAD"
 
 ; Builtins table
 ;
@@ -1811,6 +2070,9 @@ builtins_table:
     ; DEL builtin
     DAT str_builtin_del
     DAT shell_builtin_del
+    ; LOAD builtin
+    DAT str_builtin_load
+    DAT shell_builtin_load
     ; No more builtins
     DAT 0
     DAT 0
@@ -1822,7 +2084,7 @@ bootloader_code:
 ; Now our .org has been messed up, so we set non-const data up in high-ish
 ; memory
 
-.org 0xd000
+.org SHELL_DATA_START
 
 ; Global vars
 ; Current drive number
@@ -1854,4 +2116,10 @@ header2:
     RESERVE BBFS_HEADER_SIZEOF
 file2:
     RESERVE BBFS_FILE_SIZEOF
+; We need a place to put the code that moves the main code into high memory We
+; save it so we can write it out if we need to format a disk. We can't just
+; leave it at the front of our code because then we can't get the .orgs to match
+; up with the real addresses.
+format_copyloader:
+    RESERVE 32
     
