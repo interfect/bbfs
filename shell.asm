@@ -622,6 +622,8 @@ shell_exec:
     ; A is the filename length and B is the extension start
     ; See if the extension is executable and if so load from disk.
     
+    ; TODO: This doesn't work yet! Make this work!
+    
     ; Do we have the .img extension?
     SET PUSH, str_img_extension ; Arg 1: string 1
     SET PUSH, B ; Arg 2: string 2
