@@ -567,7 +567,7 @@ bbfs_filename_pack:
     SET PC, POP
     
 ; bbfs_filename_unpack(*unpacked, *packed)
-; Unpack a normal string of lenght 16 or less from a packed string in 8 words.
+; Unpack a normal string of length 16 or less from a packed string in 8 words.
 ; Unpacked buffer must be 17 words or more, for trailing null.
 ; [Z+1]: unpacked string
 ; [Z]: packed string

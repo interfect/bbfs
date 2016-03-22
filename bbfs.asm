@@ -156,7 +156,7 @@ define BBFS_ROOT_DIRECTORY 4
 ;   Return the first free sector on the disk, or 0xFFFF if no sector is free.
 ;
 ; bbfs_header_format(*header)
-;   Format the hiven header as an empty BBFS filesystem, with no files or
+;   Format the given header as an empty BBFS filesystem, with no files or
 ;   directories.
 ;
 ; API level 2: files
@@ -225,9 +225,8 @@ define BBFS_ROOT_DIRECTORY 4
 ;   packed.
 ;
 ; bbfs_filename_unpack(*unpacked, *packed)
-;   Unpack a null-terminated string of 16 or fewer characters into 8 words in
-;   packed. Note that the unpacked buffer must be 17 words, to allow for a
-;   trailing null.
+;   Unpack a normal string of length 16 or less from a packed string in 8 words.
+;   Unpacked buffer must be 17 words or more, for trailing null.
 ;
 ; bbfs_filename_compare(*packed1, *packed2)
 ;   Compare two 8-word packed filenames. Return 1 if they match, 0 otherwise.

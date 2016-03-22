@@ -1,0 +1,42 @@
+- We need to support the hard drive thingy with up to 5120 sectors.
+- In general we should support any 512-word sector drive.
+    - And it would be nice to be able to use both SectorSize and SectorCount.
+    
+- So we generalize the format
+    - Sector 0 is bootloader, sector 1 starts the FS
+    - We have 1 version word, 5 reserved, a free mask of 1 bit per sector, and then a FAT of one word per sector.
+        - On a floppy that fits in the first 4 sectors
+        - On a HDD that takes 10.6 sectors
+        - With other sector sizes we might take more or fewer sectors, but given the drive params we always know where things go.
+    
+- Then we generalize the code
+    - Don't store the entire header in memory anymore.
+        - We could have a smart cache strategy where we evict sectors when we need to touch other sectors.
+            - i.e. set the bit to allocate a sector, then update the FAT, and don't require syncing either to disk yet so we can keep thyem for allocating more sectors.
+            
+        - But we should be able to do this with just 1 sector of scratch space for a filesystem.
+            - And maybe another for an open file or directory.
+            
+    - Abstract access to the FAT
+        - The HEADER type becomes a generic filesystem handle.
+        - We can give it any number of sectors of cache maybe? Or maybe just one.
+        - It loads and saves the FAT when needed, and loads and seves the free bitmask when needed.
+        - It keeps the drive params around and knows where on disk to find everything.
+        
+    - Maybe we abstract the whole header space as a giant word array
+        - As long as we don't need more than 128 sectors for it, that works.
+        - That makes cache management super easy; just LRU it or something.
+        - And as long as our disks aren't like 60 megabytes, the FAT will fit.
+        
+    - OK so the API gets a new level -1: disk-backed word array with cacheing
+        - Has a constructor and mandatory destructor
+        - read word, write word, sync cache
+        - Doesn't even need a length, we just need to track the base sector.
+        - We can add in good cacheing later without upsetting things
+    - Then level 0 is the FS header, which consists of a disk-backed word array and some functions to manipulate the FS structures in there
+        - Constructor, destructor
+        - Allocate sector, free sector, find free sector, read FAT entry, write FAT entry, get root FS sector (given used disk params)
+        
+    - Then on top of that we build all the stuff we have now
+        - Mostly unchanged, except for anything that digs into the FAT, which now needs to go through methods.
+    
