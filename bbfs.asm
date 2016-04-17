@@ -74,7 +74,46 @@
 ; length of 16 characters. File types are 0 for a subdirectory entry, and 1 for
 ; a normal file.
 ;
+
+; Configuration:
+
+; How big of sectors do we support
+define BBFS_MAX_SECTOR_SIZE 512
+; And how many? We need a sentinel value for "no sector"
+define BBFS_MAX_SECTOR_COUNT 0xFFFF
+
+; BBOS dependency:
+
+#include "bbos.inc.asm"
+
+; BBOS drive API
+; Get Drive Count         0x2000  OUT Drive Count         Drive Count     1.0
+; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
+; Get Drive Parameters    0x2002  *DriveParams, DriveNum  None            1.0
+; Read Drive Sector       0x2003  Sector, Ptr, DriveNum   Success         1.0
+; Write Drive Sector      0x2004  Sector, Ptr, DriveNum   Success         1.0
+define GET_DRIVE_COUNT 0x2000
+define CHECK_DRIVE_STATUS 0x2001
+define GET_DRIVE_PARAMETERS 0x2002
+define READ_DRIVE_SECTOR 0x2003
+define WRITE_DRIVE_SECTOR 0x2004
+; States and errors are in bbos.inc.asm
+; Drive param struct stuff is also there
+
 ; Structures:
+
+; BBFS_DEVICE: sector cache with eviction.
+; on.
+define BBFS_DEVICE_SIZEOF 2 + DRIVEPARAM_SIZE + BBFS_MAX_SECTOR_SIZE
+define BBFS_DEVICE_DRIVE 0 ; What drive is this array on?
+define BBFS_DEVICE_SECTOR 1 ; What sector is loaded now?
+define BBFS_DEVICE_DRIVEINFO 2 ; Holds the drive info struct: sector size at DRIVE_SECT_SIZE and count at DRIVE_SECT_COUNT
+define BBFS_DEVICE_BUFFER 2 + DRIVEPARAM_SIZE ; Where is the sector buffer? Right now holds one sector.
+
+; BBFS_ARRAY: disk-backed array of contiguous sectors
+define BBFS_ARRAY_SIZEOF 2
+define BBFS_ARRAY_DEVICE 0 ; Pointer to the device being used
+define BBFS_ARRAY_START 1 ; Sector at which the array starts
 
 ; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
 define BBFS_HEADER_SIZEOF 1536
@@ -232,29 +271,11 @@ define BBFS_ROOT_DIRECTORY 4
 ;   Compare two 8-word packed filenames. Return 1 if they match, 0 otherwise.
 ;   Performs case-insensitive comparison.
 
-
-; BBOS dependency
-
-#include "bbos.inc.asm"
-
-; BBOS drive API
-; Get Drive Count         0x2000  OUT Drive Count         Drive Count     1.0
-; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
-; Get Drive Parameters    0x2002  *DriveParams, DriveNum  None            1.0
-; Read Drive Sector       0x2003  Sector, Ptr, DriveNum   Success         1.0
-; Write Drive Sector      0x2004  Sector, Ptr, DriveNum   Success         1.0
-define GET_DRIVE_COUNT 0x2000
-define CHECK_DRIVE_STATUS 0x2001
-define GET_DRIVE_PARAMETERS 0x2002
-define READ_DRIVE_SECTOR 0x2003
-define WRITE_DRIVE_SECTOR 0x2004
-; States and errors are in bbos.inc.asm
-; Drive param struct stuff is also there
-
-
+#include "bbfs_device.asm"
 #include "bbfs_header.asm"
 #include "bbfs_files.asm"
 #include "bbfs_directories.asm"
+
 
 ; Implementation
 

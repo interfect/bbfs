@@ -39,4 +39,11 @@
         
     - Then on top of that we build all the stuff we have now
         - Mostly unchanged, except for anything that digs into the FAT, which now needs to go through methods.
+        
+----------------
+
+- How about this
+    - One level of disk cache
+        - Load a sector and get a pointer
+    - On top of that we put the array.
     
