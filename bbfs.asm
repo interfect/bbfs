@@ -115,6 +115,13 @@ define BBFS_ARRAY_SIZEOF 2
 define BBFS_ARRAY_DEVICE 0 ; Pointer to the device being used
 define BBFS_ARRAY_START 1 ; Sector at which the array starts
 
+; BBFS_VOLUME: represents a filesystem. Constructed off a device and contains an
+; array for the header. Has all the methods to access the FAT.
+define BBFS_VOLUME_SIZEOF BBFS_ARRAY_SIZEOF + 2
+define BBFS_VOLUME_ARRAY 0 ; Contained array that we use for the header
+define BBFS_VOLUME_FREEMASK_START BBFS_ARRAY_SIZEOF ; Offset in the array where the freemask starts
+define BBFS_VOLUME_FAT_START BBFS_ARRAY_SIZEOF + 1 ; Offset in the array where the FAT starts
+
 ; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
 define BBFS_HEADER_SIZEOF 1536
 define BBFS_HEADER_VERSION 0
@@ -162,6 +169,7 @@ define BBFS_ERR_DRIVE               0x0005
 define BBFS_ERR_DISC_FULL           0x0007
 define BBFS_ERR_EOF                 0x0008
 define BBFS_ERR_UNKNOWN             0x0009
+define BBFS_ERR_UNFORMATTED         0x000A
 define BBFS_ERR_NOTDIR              0x1001 ; Directory file wasn't a directory
 define BBFS_ERR_NOTFOUND            0x1002 ; No file at given sector/name 
 define BBFS_ERR_INVALID             0x1003 ; Name or other parameters invalid

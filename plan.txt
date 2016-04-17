@@ -4,7 +4,7 @@
     
 - So we generalize the format
     - Sector 0 is bootloader, sector 1 starts the FS
-    - We have 1 version word, 5 reserved, a free mask of 1 bit per sector, and then a FAT of one word per sector.
+    - We have 1 version word, 5 reserved, a free mask of 1 bit per sector (word-aligned), and then a FAT of one word per sector.
         - On a floppy that fits in the first 4 sectors
         - On a HDD that takes 10.6 sectors
         - With other sector sizes we might take more or fewer sectors, but given the drive params we always know where things go.
