@@ -19,8 +19,8 @@ bbfs_device_open:
     SET Z, SP
     ADD Z, 2
 
-    SET PUSH, A
-
+    SET PUSH, A ; BBOS scratch, and struct pointer
+    
     ; Make the BBOS call to get device info
     SET PUSH, [Z+1] ; Arg 1: drive info to populate
     ADD [SP], BBFS_DEVICE_DRIVEINFO
@@ -134,24 +134,25 @@ bbfs_device_get:
     SET Z, SP
     ADD Z, 2
 
-    SET PUSH, A
+    SET PUSH, A ; BBOS calls
+    SET PUSH, B ; Device struct
 
-    SET A, [Z+1] ; Grab the device pointer
+    SET B, [Z+1] ; Grab the device pointer
     
-    IFE [A+BBFS_DEVICE_SECTOR], [Z]
+    IFE [B+BBFS_DEVICE_SECTOR], [Z]
         ; Already loaded!
         SET PC, .skip_load    
     
-    IFE [A+BBFS_DEVICE_SECTOR], BBFS_MAX_SECTOR_COUNT
+    IFE [B+BBFS_DEVICE_SECTOR], BBFS_MAX_SECTOR_COUNT
         ; Nothing to save!
         SET PC, .skip_save    
     
     ; Otherwise we need to save the sector
 
-    SET PUSH, [A+BBFS_DEVICE_SECTOR] ; Arg 1: Sector to write
-    SET PUSH, A ; Arg 2: Pointer to write from
+    SET PUSH, [B+BBFS_DEVICE_SECTOR] ; Arg 1: Sector to write
+    SET PUSH, B ; Arg 2: Pointer to write from
     ADD [SP], BBFS_DEVICE_BUFFER 
-    SET PUSH, [A+BBFS_DEVICE_DRIVE] ; Arg 3: drive number
+    SET PUSH, [B+BBFS_DEVICE_DRIVE] ; Arg 3: drive number
     SET A, WRITE_DRIVE_SECTOR
     INT BBOS_IRQ_MAGIC
     
@@ -168,9 +169,9 @@ bbfs_device_get:
     ; Now we saved the existing sector (or don't need to), so load the new one
     
     SET PUSH, [Z] ; Arg 1: Sector to read
-    SET PUSH, A ; Arg 2: Pointer to read to
+    SET PUSH, B ; Arg 2: Pointer to read to
     ADD [SP], BBFS_DEVICE_BUFFER 
-    SET PUSH, [A+BBFS_DEVICE_DRIVE] ; Arg 3: drive number
+    SET PUSH, [B+BBFS_DEVICE_DRIVE] ; Arg 3: drive number
     SET A, READ_DRIVE_SECTOR
     INT BBOS_IRQ_MAGIC
     
@@ -184,14 +185,18 @@ bbfs_device_get:
     ; Clean up stack
     ADD SP, 3
     
+    ; Say we loaded the right thing
+    SET [B+BBFS_DEVICE_SECTOR], [Z]
+    
 .skip_load:
     ; Point the return value at the buffer we loaded into.
-    SET [Z], A
-    ADD Z, BBFS_DEVICE_BUFFER
+    ADD B, BBFS_DEVICE_BUFFER
+    SET [Z], B
     SET PC, .done
 .error:
     SET [Z], 0x0000
 .done:
+    SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP

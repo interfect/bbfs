@@ -47,3 +47,5 @@
         - Load a sector and get a pointer
     - On top of that we put the array.
     
+    - TODO: const get so we don't need to write back unmodified things...
+    

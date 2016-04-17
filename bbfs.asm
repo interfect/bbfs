@@ -272,6 +272,7 @@ define BBFS_ROOT_DIRECTORY 4
 ;   Performs case-insensitive comparison.
 
 #include "bbfs_device.asm"
+#include "bbfs_array.asm"
 #include "bbfs_header.asm"
 #include "bbfs_files.asm"
 #include "bbfs_directories.asm"
