@@ -134,14 +134,13 @@ define BBFS_HEADER_FREEMASK 6
 define BBFS_HEADER_FAT 96
 
 ; BFFS_FILE: file handle structure
-define BBFS_FILE_SIZEOF 518
-define BBFS_FILE_DRIVE 0 ; BBOS Disk drive number that the file is on
-define BBFS_FILE_FILESYSTEM_HEADER 1 ; Address of the BFFS_HEADER for the file
-define BBFS_FILE_START_SECTOR 2 ; Sector that the file starts at
-define BBFS_FILE_SECTOR 3 ; Sector currently in buffer
-define BBFS_FILE_OFFSET 4 ; Offset in the sector at which to read/write next
-define BBFS_FILE_MAX_OFFSET 5 ; Numkber of used words in the sector
-define BBFS_FILE_BUFFER 6 ; 512-word buffer for file data for the current sector
+; Now all the cacheing is done by the device.
+define BBFS_FILE_SIZEOF 5
+define BBFS_FILE_VOLUME 0 ; BBFS_VOLUME that the file is on
+define BBFS_FILE_START_SECTOR 1 ; Sector that the file starts at
+define BBFS_FILE_SECTOR 2 ; Sector currently being read/written
+define BBFS_FILE_OFFSET 3 ; Offset in the sector at which to read/write next
+define BBFS_FILE_MAX_OFFSET 4 ; Number of used words in the sector
 
 ; BBFS_DIRHEADER: directory header structure
 define BBFS_DIRHEADER_SIZEOF 2
