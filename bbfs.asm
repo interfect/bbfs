@@ -81,6 +81,8 @@
 define BBFS_MAX_SECTOR_SIZE 512
 ; And how many? We need a sentinel value for "no sector"
 define BBFS_MAX_SECTOR_COUNT 0xFFFF
+; Where should the volume info live? Sector(s) before this are bootloader
+define BBFS_START_SECTOR 1
 
 ; BBOS dependency:
 
@@ -117,11 +119,14 @@ define BBFS_ARRAY_START 1 ; Sector at which the array starts
 
 ; BBFS_VOLUME: represents a filesystem. Constructed off a device and contains an
 ; array for the header. Has all the methods to access the FAT.
-define BBFS_VOLUME_SIZEOF BBFS_ARRAY_SIZEOF + 2
+define BBFS_VOLUME_SIZEOF BBFS_ARRAY_SIZEOF + 3
 define BBFS_VOLUME_ARRAY 0 ; Contained array that we use for the header
 define BBFS_VOLUME_FREEMASK_START BBFS_ARRAY_SIZEOF ; Offset in the array where the freemask starts
-define BBFS_VOLUME_FAT_START BBFS_ARRAY_SIZEOF + 1 ; Offset in the array where the FAT starts
+define BBFS_VOLUME_FAT_START BBFS_VOLUME_FREEMASK_START + 1 ; Offset in the array where the FAT starts
+define BBFS_VOLUME_FIRST_USABLE_SECTOR BBFS_VOLUME_FAT_START + 1 ; Number of the first usable sector (not used in the array)
 
+; What's in a BBFS filesystem header on disk?
+; Only the version location and freemask start are predicatble
 ; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
 define BBFS_HEADER_SIZEOF 1536
 define BBFS_HEADER_VERSION 0
@@ -281,6 +286,7 @@ define BBFS_ROOT_DIRECTORY 4
 
 #include "bbfs_device.asm"
 #include "bbfs_array.asm"
+#include "bbfs_volume.asm"
 #include "bbfs_header.asm"
 #include "bbfs_files.asm"
 #include "bbfs_directories.asm"

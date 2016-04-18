@@ -240,6 +240,34 @@ start:
         ; It didn't work
         SET PC, fail
         
+    ; Open up the disk as a volume
+    SET PUSH, str_volume_open
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Make it
+    SET PUSH, volume ; Arg 1: volume
+    SET PUSH, device ; Arg 2: device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    
+    ; It should be unformatted but otherwise OK.
+    IFN A, BBFS_ERR_UNFORMATTED
+        SET PC, fail
+        
+    ; We should have gotten the right parameters for a floppy
+    ; Should be compatible with old implementation
+    IFN [volume+BBFS_VOLUME_FREEMASK_START], 6
+        SET PC, fail
+    IFN [volume+BBFS_VOLUME_FAT_START], 96
+        SET PC, fail
+    IFN [volume+BBFS_VOLUME_FIRST_USABLE_SECTOR], 4
+        SET PC, fail
+    
+        
     ; Say we're done
     SET PUSH, str_done
     SET PUSH, 1 ; With newline
@@ -279,6 +307,8 @@ str_array_set:
     ASCIIZ "Setting array values..."
 str_array_get:
     ASCIIZ "Getting array values..."
+str_volume_open:
+    ASCIIZ "Opening volume..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
@@ -292,6 +322,8 @@ device:
 RESERVE BBFS_DEVICE_SIZEOF
 array:
 RESERVE BBFS_ARRAY_SIZEOF
+volume:
+RESERVE BBFS_VOLUME_SIZEOF
 
 bootloader_code:
 ; Include the BBFS bootloader assembled code. On the final disk the bootloader
