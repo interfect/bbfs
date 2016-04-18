@@ -299,9 +299,167 @@ bbfs_volume_allocate_sector:
 
 ; bbfs_volume_free_sector(volume*, sector_num)
 ;   Mark the given sector as free in the bitmap. Returns error code.
+; [Z+1]: BBFS_VOLUME to work on
+; [Z]: sector number to mark free in the FAT
+; Returns: error code in [Z]
+bbfs_volume_free_sector:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Bitmask for setting
+    SET PUSH, B ; Bit offset in its word, also word to work on
+    SET PUSH, C ; Word the bit appears in
+    SET PUSH, X ; BBFS_VOLUME this pointer
+    
+    ; Grab the volume
+    SET X, [Z+1]
+    
+    ; Where is the relevant word
+    SET C, [Z]
+    DIV C, 16
+    ; Use that as an offset into the free bitmask in the array
+    ADD C, [X+BBFS_VOLUME_FREEMASK_START]
+    
+    ; What bit in the word do we want?
+    SET B, [Z]
+    MOD B, 16
+    
+    ; Make the mask
+    SET A, 1
+    SHL A, B
+    ; On;y the bit to set free is on.
+
+    ; Load the word to edit
+    SET PUSH, X ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, C ; Arg 2: word to get
+    JSR bbfs_array_get
+    SET B, POP ; Collect the word
+    IFN [SP], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
+
+    BOR B, A ; Keep all the bits except the target one
+    
+    ; Now put the word back
+    SET PUSH, X ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, C ; Arg 2: word to set
+    SET PUSH, B ; Arg 3: new value
+    JSR bbfs_array_set
+    SET [Z], POP ; Just return this error code
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_stack:
+    ; Error is on the stack. Pop it.
+    SET [Z], POP
+.return:
+    ; Return
+    SET X, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+
 
 ; bbfs_volume_find_free_sector(volume*)
 ;   Return the first free sector on the disk, or 0xFFFF if no sector is free.
+; [Z]: address of BBFS_VOLUME to search
+bbfs_volume_find_free_sector:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Word we have found a free sector in
+    SET PUSH, B ; Free bit in the word
+    SET PUSH, C ; Addressing scratch/freremask word value
+    SET PUSH, X ; Mask
+    SET PUSH, Y ; BBFS_VOLUME this pointer
+    
+    SET Y, [Z] ; Grab the volume
+    
+    SET A, [Y+BBFS_VOLUME_FREEMASK_START] ; Start at word 0 in the free bitmap
+    
+    
+.word_loop:
+    ; Look at that word in the bitmap
+    
+    SET PUSH, Y ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, A ; Arg 2: word to get
+    JSR bbfs_array_get
+    SET C, POP ; Collect the word
+    IFN [SP], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
+    
+    
+    IFN C, 0 ; We found a word that doesn't represent 16 used sectors
+        SET PC, .found_word
+    
+    ; Otherwise keep searching
+    ADD A, 1
+    IFL A, [Y+BBFS_VOLUME_FAT_START]
+        SET PC, .word_loop
+    
+    ; We might not find anything if all the sectors are used
+    SET [Z], 0xFFFF
+    SET PC, .return
+    
+.found_word:
+    ; Word at A in the FS header (stored in C) has a free bit
+    SUB A, [Y+BBFS_VOLUME_FREEMASK_START] ; Convert A to be bitmap-relative
+    ; Look for the bit
+    SET B, 0
+    
+.bit_loop:
+    ; Make the mask
+    SET X, 1
+    SHL X, B
+    
+    ; Check against the word
+    AND X, C
+    
+    IFG X, 0 ; This bit is set (free)
+        SET PC, .found_bit
+
+    ADD B, 1
+    IFL B, 16 ; Keep going through bits 0-15
+        SET PC, .bit_loop
+        
+    ; We should never end up not finding a free bit, but if we do:
+    SET [Z], 0xFFFF
+    SET PC, .return
+
+.found_bit:   
+    
+    ; Compute word * 16 + bit and return it
+    SET [Z], A
+    MUL [Z], 16
+    ADD [Z], B
+    
+    SET PC, .return
+    
+.error_stack:
+    ; TODO; actually use the code
+    ADD SP, 1
+    ; For now just fake a disk full
+    SET [Z], 0xFFFF
+.return:
+    ; Return
+    SET Y, POP
+    SET X, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_fat_set(volume*, sector_num, value)
 ;   Set the FAT entry for the given sector to the given value (either next

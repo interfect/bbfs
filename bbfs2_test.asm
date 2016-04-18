@@ -263,6 +263,20 @@ start:
     
     IFN A, BBFS_ERR_NONE
         SET PC, fail
+        
+    ; Now find a free sector
+    SET PUSH, str_volume_find_free
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, volume ; Arg 1: volume
+    JSR bbfs_volume_find_free_sector
+    SET A, POP
+    
+    IFN A, 4 ; First free sector on a floppy should be 4
+        SET PC, fail
 
 close:
     ; Now close up
@@ -327,6 +341,8 @@ str_volume_open:
     ASCIIZ "Opening volume..."
 str_volume_format:
     ASCIIZ "Formatting volume..."
+str_volume_find_free:
+    ASCIIZ "Find free sector..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
