@@ -105,13 +105,200 @@ bbfs_volume_open:
     SET PC, POP
 
 ; bbfs_volume_format(volume*)
-;   Format the given volume with an empty BBFS filesystem. Returns an error code.
+;   Format the given volume with an empty BBFS filesystem. Returns an error
+;   code.
+; [Z+1]: BBFS_VOLUME to operate on
+; Returns: error code in [Z]
+bbfs_volume_format:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Pointer to the volume
+    SET PUSH, B ; Pointer to the array
+    SET PUSH, C ; Math scratch
+    SET PUSH, I ; Loop index
+    SET PUSH, J ; Sector countdown
+    
+    SET A, [Z] ; Get the volume
+    
+    ; Get the array
+    SET B, A
+    ADD B, BBFS_VOLUME_ARRAY
+    
+    ; Write the version
+    SET PUSH, B ; Arg 1: array
+    SET PUSH, BBFS_HEADER_VERSION ; Arg 2: offset in array
+    SET PUSH, BBFS_VERSION ; Arg 3: value to write
+    JSR bbfs_array_set
+    SET C, POP
+    ADD SP, 2
+    
+    ; Check return code
+    IFN C, BBFS_ERR_NONE
+        SET PC, .error_c
+        
+    ; Zero out all the reserved words
+    SET I, BBFS_HEADER_VERSION
+    ADD I, 1
+    
+.reserved_loop:
+    SET PUSH, B ; Arg 1: array
+    SET PUSH, I ; Arg 2: offset in array
+    SET PUSH, 0 ; Arg 3: value to write
+    JSR bbfs_array_set
+    SET C, POP
+    ADD SP, 2
+    IFN C, BBFS_ERR_NONE
+        SET PC, .error_c
+        
+    ADD I, 1
+    IFN I, [A+BBFS_VOLUME_FREEMASK_START]
+        ; Loop until we hit where the freemask starts
+        SET PC, .reserved_loop
+        
+    ; OK now we do the freemask. We'll fill it with 0xFFFF now and go back and
+    ; fix the low reserved sectors later.
+.freemask_loop:
+    SET PUSH, B ; Arg 1: array
+    SET PUSH, I ; Arg 2: offset in array
+    SET PUSH, 0xFFFF ; Arg 3: value to write
+    JSR bbfs_array_set
+    SET C, POP
+    ADD SP, 2
+    IFN C, BBFS_ERR_NONE
+        SET PC, .error_c
+        
+    ADD I, 1
+    IFN I, [A+BBFS_VOLUME_FAT_START]
+        ; Loop until we hit the FAT
+        SET PC, .freemask_loop
+        
+    ; Get the number of sectors we have to do
+    SET PUSH, [A+BBFS_VOLUME_ARRAY+BBFS_ARRAY_DEVICE] ; Arg 1: device. TODO: expose through a call on the array?
+    JSR bbfs_device_sector_count
+    SET J, POP
+        
+.fat_loop:
+    ; All the FAT enties also get 0xFFFF for unallocated.
+    SET PUSH, B ; Arg 1: array
+    SET PUSH, I ; Arg 2: offset in array
+    SET PUSH, 0xFFFF ; Arg 3: value to write
+    JSR bbfs_array_set
+    SET C, POP
+    ADD SP, 2
+    IFN C, BBFS_ERR_NONE
+        SET PC, .error_c
+        
+    ADD I, 1
+    SUB J, 1
+    
+    IFN J, 0
+        ; Loop until we do all the sectors
+        SET PC, .fat_loop
+    
+    ; Now reserve sectors that aren't usable
+    SET J, 0
+.allocate_loop:
+    ; Allocate each sector
+    SET PUSH, A ; Arg 1: volume
+    SET PUSH, J ; Arg 2: sector
+    JSR bbfs_volume_allocate_sector
+    SET C, POP
+    ADD SP, 1
+    
+    IFN C, BBFS_ERR_NONE
+        SET PC, .error_c
+        
+    ADD J, 1
+    IFN J, [A+BBFS_VOLUME_FIRST_USABLE_SECTOR]
+        SET PC, .allocate_loop
+        
+    ; Once we're here we've allocated all the reserved sectors at the beginning.
+        
+.error_c:
+    SET [Z], C
+.return:   
+    SET J, POP
+    SET I, POP 
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_allocate_sector(volume*, sector_num)
-;   Mark the given sector as allocated in the bitmap
+;   Mark the given sector as allocated in the bitmap. Returns error code.
+; [Z+1]: BBFS_VOLUME to work on
+; [Z]: sector number to mark used in the FAT
+; Returns: error code in [Z]
+bbfs_volume_allocate_sector:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Bitmask for setting
+    SET PUSH, B ; Bit offset in its word, also word to work on
+    SET PUSH, C ; Word the bit appears in
+    SET PUSH, X ; BBFS_VOLUME this pointer
+    
+    ; Grab the volume
+    SET X, [Z+1]
+    
+    ; Where is the relevant word
+    SET C, [Z]
+    DIV C, 16
+    ; Use that as an offset into the free bitmask in the array
+    ADD C, [X+BBFS_VOLUME_FREEMASK_START]
+    
+    ; What bit in the word do we want?
+    SET B, [Z]
+    MOD B, 16
+    
+    ; Make the mask
+    SET A, 1
+    SHL A, B
+    XOR A, 0xffff ; Flip every bit in the mask    
+
+    ; Load the word to edit
+    SET PUSH, X ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, C ; Arg 2: word to get
+    JSR bbfs_array_get
+    SET B, POP ; Collect the word
+    IFN [SP], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
+
+    AND B, A ; Keep all the bits except the target one
+    
+    ; Now put the word back
+    SET PUSH, X ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, C ; Arg 2: word to set
+    SET PUSH, B ; Arg 3: new value
+    JSR bbfs_array_set
+    SET [Z], POP ; Just return this error code
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_stack:
+    ; Error is on the stack. Pop it.
+    SET [Z], POP
+.return:
+    ; Return
+    SET X, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_free_sector(volume*, sector_num)
-;   Mark the given sector as free in the bitmap
+;   Mark the given sector as free in the bitmap. Returns error code.
 
 ; bbfs_volume_find_free_sector(volume*)
 ;   Return the first free sector on the disk, or 0xFFFF if no sector is free.

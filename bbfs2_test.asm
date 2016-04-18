@@ -222,24 +222,6 @@ start:
     IFN A, 0xCCCC
         SET PC, fail
     
-    
-    ; Now close up
-    SET PUSH, str_device_sync
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    
-    ; Commit changes, if any
-    SET PUSH, device
-    JSR bbfs_device_sync
-    SET A, POP
-        
-    IFN A, BBFS_ERR_NONE
-        ; It didn't work
-        SET PC, fail
-        
     ; Open up the disk as a volume
     SET PUSH, str_volume_open
     SET PUSH, 1 ; With newline
@@ -247,7 +229,7 @@ start:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    ; Make it
+    ; Do it
     SET PUSH, volume ; Arg 1: volume
     SET PUSH, device ; Arg 2: device
     JSR bbfs_volume_open
@@ -266,7 +248,41 @@ start:
         SET PC, fail
     IFN [volume+BBFS_VOLUME_FIRST_USABLE_SECTOR], 4
         SET PC, fail
+        
+    ; Now format the disk
+    SET PUSH, str_volume_format
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
     
+    ; Do it
+    SET PUSH, volume ; Arg 1: volume
+    JSR bbfs_volume_format
+    SET A, POP
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+
+close:
+    ; Now close up
+    SET PUSH, str_device_sync
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    
+    ; Commit changes, if any
+    SET PUSH, device
+    JSR bbfs_device_sync
+    SET A, POP
+        
+    IFN A, BBFS_ERR_NONE
+        ; It didn't work
+        SET PC, fail
+       
+done:
         
     ; Say we're done
     SET PUSH, str_done
@@ -309,6 +325,8 @@ str_array_get:
     ASCIIZ "Getting array values..."
 str_volume_open:
     ASCIIZ "Opening volume..."
+str_volume_format:
+    ASCIIZ "Formatting volume..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
