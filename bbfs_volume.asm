@@ -231,7 +231,7 @@ bbfs_volume_format:
 ; bbfs_volume_allocate_sector(volume*, sector_num)
 ;   Mark the given sector as allocated in the bitmap. Returns error code.
 ; [Z+1]: BBFS_VOLUME to work on
-; [Z]: sector number to mark used in the FAT
+; [Z]: sector number to mark used in the bitmap
 ; Returns: error code in [Z]
 bbfs_volume_allocate_sector:
     ; Set up frame pointer
@@ -300,7 +300,7 @@ bbfs_volume_allocate_sector:
 ; bbfs_volume_free_sector(volume*, sector_num)
 ;   Mark the given sector as free in the bitmap. Returns error code.
 ; [Z+1]: BBFS_VOLUME to work on
-; [Z]: sector number to mark free in the FAT
+; [Z]: sector number to mark free in the bitmap
 ; Returns: error code in [Z]
 bbfs_volume_free_sector:
     ; Set up frame pointer
@@ -439,10 +439,20 @@ bbfs_volume_find_free_sector:
 
 .found_bit:   
     
-    ; Compute word * 16 + bit and return it
+    ; Compute word * 16 + bit to get the sector
     SET [Z], A
     MUL [Z], 16
     ADD [Z], B
+    
+    ; Make sure it is not past the end of the disk. We had a full word of 1s in
+    ; the last word in the bitmask.
+    SET PUSH, [Y+BBFS_VOLUME_ARRAY+BBFS_ARRAY_DEVICE]
+    JSR bbfs_device_sector_count
+    SET C, POP
+    
+    IFG [Z], C
+        ; This is past the last sector available!
+        SET [Z], 0xFFFF
     
     SET PC, .return
     
@@ -465,14 +475,83 @@ bbfs_volume_find_free_sector:
 ;   Set the FAT entry for the given sector to the given value (either next
 ;   sector number if high bit is off, or words used in sector if high bit is
 ;   on). Returns an error code.
+; [Z+2]: BBFS_VOLUME to work on
+; [Z+1]: sector number to mark 
+; [Z]: value for the FAT sector
+; Returns: error code in [Z]
+bbfs_volume_fat_set:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBFS_VOLUME pointer
+    
+    SET A, [Z+2] ; Grab the volume
+    
+    SET PUSH, A ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, [Z+1] ; Arg 2: offset in the header array to set
+    ADD [SP], [A+BBFS_VOLUME_FAT_START]
+    SET PUSH, [Z] ; Arg 3: value to put
+    JSR bbfs_array_set
+    SET [Z], POP ; Grab error code
+    ADD SP, 2
+    
+    ; Return
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_fat_get(volume*, sector_num)
 ;   Get the FAT entry for the given sector to the given value (either next
 ;   sector number if high bit is off, or words used in sector if high bit is
 ;   on). Returns FAT entry, and an error code.
+; [Z+1]: BBFS_VOLUME to work on
+; [Z]: sector number to mark 
+; Returns: FAT entry in [Z], error code in [Z+1]
+bbfs_volume_fat_get:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBFS_VOLUME pointer
+    
+    SET A, [Z+1] ; Grab the volume
+    
+    SET PUSH, A ; Arg 1: array
+    ADD [SP], BBFS_VOLUME_ARRAY
+    SET PUSH, [Z] ; Arg 2: offset in the header array to get
+    ADD [SP], [A+BBFS_VOLUME_FAT_START]
+    JSR bbfs_array_get
+    SET [Z], POP ; Grab value
+    SET [Z+1], POP ; Grab error code
+    
+    ; Return
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_get_device(volume*)
 ;   Method to pull the device out of the volume, for syncing.
+; [Z]: BBFS_VOLUME to work on
+; Returns: device in [Z]
+bbfs_volume_get_device:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBFS_VOLUME pointer
+    
+    SET A, [Z]
+    ; Just go find where the device pointer is and return it
+    SET [Z], [A+BBFS_VOLUME_ARRAY+BBFS_ARRAY_DEVICE]
+    
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; Nothing here syncs. All syncing needs to be done on the underlying device.
 

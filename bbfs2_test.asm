@@ -277,6 +277,59 @@ start:
     
     IFN A, 4 ; First free sector on a floppy should be 4
         SET PC, fail
+        
+    ; Now set something in the FAT
+    SET PUSH, str_volume_fat_set
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, volume ; Arg 1: volume
+    SET PUSH, 1 ; Arg 2: sector
+    SET PUSH, 2 ; Arg 3: FAT value
+    JSR bbfs_volume_fat_set
+    SET A, POP
+    ADD SP, 2
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Now get it back
+    SET PUSH, str_volume_fat_get
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, volume ; Arg 1: volume
+    SET PUSH, 1 ; Arg 2: sector
+    JSR bbfs_volume_fat_get
+    SET A, POP
+    SET B, POP
+    
+    IFN B, BBFS_ERR_NONE
+        SET PC, fail
+        
+    IFN A, 2
+        ; We didn't get what we put
+        SET PC, fail
+
+    ; Make sure we can get a volume's device
+    SET PUSH, str_volume_device
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, volume ; Arg 1: volume
+    JSR bbfs_volume_get_device
+    SET A, POP
+    
+    IFN A, device
+        SET PC, fail
+        
+    
 
 close:
     ; Now close up
@@ -343,6 +396,12 @@ str_volume_format:
     ASCIIZ "Formatting volume..."
 str_volume_find_free:
     ASCIIZ "Find free sector..."
+str_volume_fat_set:
+    ASCIIZ "Setting FAT entry..."
+str_volume_fat_get:
+    ASCIIZ "Getting FAT entry..."
+str_volume_device:
+    ASCIIZ "Getting volume device..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
