@@ -287,7 +287,7 @@ start:
     
     SET PUSH, volume ; Arg 1: volume
     SET PUSH, 1 ; Arg 2: sector
-    SET PUSH, 2 ; Arg 3: FAT value
+    SET PUSH, 0xFACE ; Arg 3: FAT value
     JSR bbfs_volume_fat_set
     SET A, POP
     ADD SP, 2
@@ -311,7 +311,7 @@ start:
     IFN B, BBFS_ERR_NONE
         SET PC, fail
         
-    IFN A, 2
+    IFN A, 0xFACE
         ; We didn't get what we put
         SET PC, fail
 
@@ -329,7 +329,56 @@ start:
     IFN A, device
         SET PC, fail
         
+    ; Say we're making a file
+    SET PUSH, str_file_create
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
     
+    ; Make a file
+    SET PUSH, file
+    SET PUSH, volume
+    JSR bbfs_file_create
+    SET A, POP
+    ADD SP, 1
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Write to it
+    SET PUSH, str_file_write
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, file ; Arg 1: BBFS_FILE to write to
+    SET PUSH, str_file_contents ; Arg 2: Address to get data from
+    SET PUSH, file_contents_end-str_file_contents ; Arg 3: number of words to write
+    ; Returns: error code in [Z]
+    JSR bbfs_file_write
+    SET A, POP
+    ADD SP, 2
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+     ; Say we're flushing it
+    SET PUSH, str_file_flush
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Make a file
+    SET PUSH, file
+    JSR bbfs_file_flush
+    SET A, POP
+    ADD SP, 1
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
 
 close:
     ; Now close up
@@ -402,10 +451,20 @@ str_volume_fat_get:
     ASCIIZ "Getting FAT entry..."
 str_volume_device:
     ASCIIZ "Getting volume device..."
+str_file_create:
+    ASCIIZ "Creating file..."
+str_file_write:
+    ASCIIZ "Writing to file..."
+str_file_flush:
+    ASCIIZ "Flushing..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
     ASCIIZ "Failed!"
+
+str_file_contents:
+    ASCIIZ "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal."
+file_contents_end:
 
 ; Mark the end of the program data
 program_end:
@@ -417,6 +476,8 @@ array:
 RESERVE BBFS_ARRAY_SIZEOF
 volume:
 RESERVE BBFS_VOLUME_SIZEOF
+file:
+RESERVE BBFS_FILE_SIZEOF
 
 bootloader_code:
 ; Include the BBFS bootloader assembled code. On the final disk the bootloader

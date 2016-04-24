@@ -100,6 +100,7 @@ bbfs_file_open:
     SET B, POP
     IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
+    ADD SP, 1
     
     IFL B, 0x8000
         ; The high bit is unset, so this first sector is not also the last and
@@ -289,7 +290,7 @@ bbfs_file_write:
     
     ; And the sector size on the device
     SET PUSH, C ; Arg 1: device
-    JSB bbfs_device_sector_size
+    JSR bbfs_device_sector_size
     SET Y, POP
     
     ; Grab the sector we're supposed to be writing to
@@ -297,8 +298,11 @@ bbfs_file_write:
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
     JSR bbfs_device_get
     SET I, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
+    ADD SP, 1
+    
+    IFE I, 0x0000
+        ; Couldn't get the sector
+        SET PC, .error_drive
     
     ; Point I at the word in the file buffer to write to
     ADD I, [B+BBFS_FILE_OFFSET]
@@ -323,6 +327,9 @@ bbfs_file_write:
         ; We need to expand the part of this sector used by bumping up the max
         ; offset in this sector.
         SET [B+BBFS_FILE_MAX_OFFSET], [B+BBFS_FILE_OFFSET]
+        
+    ; This will get committed to the FAT when we sync/close the file, if we
+    ; don't go beyond this sector before doing so.
     
     ; Loop around
     SET PC, .write_until_full
@@ -337,6 +344,7 @@ bbfs_file_write:
     SET A, POP
     IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
+    ADD SP, 1
     
     IFG A, 0x7FFF
         ; If the high bit is set, this was the last sector
@@ -359,6 +367,7 @@ bbfs_file_write:
     SET A, POP
     IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
+    ADD SP, 1
     
     IFL A, 0x8000
         ; The high bit is unset, so this sector is not the last and is
@@ -374,8 +383,11 @@ bbfs_file_write:
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
     JSR bbfs_device_get
     SET I, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
+    ADD SP, 1
+    
+    IFE I, 0x0000
+        ; Couldn't get the sector
+        SET PC, .error_drive
 
     ; Keep writing
     SET PC, .write_until_full
@@ -456,6 +468,11 @@ bbfs_file_write:
 .error_space:
     ; Return the out of space error
     SET [Z], BBFS_ERR_DISC_FULL
+    SET PC, .return
+    
+.error_drive:
+    ; Couldn't get a sector pointer
+    SET [Z], BBFS_ERR_DRIVE
 
 .return:
     SET Y, POP
@@ -482,7 +499,7 @@ bbfs_file_read:
 
     SET PUSH, A ; BBOS calls, scratch
     SET PUSH, B ; File struct address
-    SET PUSH, C ; Filesystem volume struct address
+    SET PUSH, C ; Filesystem device struct address
     SET PUSH, I ; Pointer into file buffer
     SET PUSH, J ; Pointer into data
     SET PUSH, Y ; Words per sector
@@ -494,9 +511,14 @@ bbfs_file_read:
     ; And the FS volume struct address
     SET C, [B+BBFS_FILE_VOLUME]
     
+    ; And the device address
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to get device for
+    JSR bbfs_volume_get_device
+    SET C, POP
+    
     ; And the sector size on the device
     SET PUSH, C ; Arg 1: device
-    JSB bbfs_device_sector_size
+    JSR bbfs_device_sector_size
     SET Y, POP
     
     ; Grab the sector we're supposed to be reading
@@ -504,9 +526,11 @@ bbfs_file_read:
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
     JSR bbfs_device_get
     SET I, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
     ADD SP, 1
+    
+    IFE I, 0x0000
+        ; Couldn't get the sector
+        SET PC, .error_drive
 
     ; Point I at the word in the file buffer to read from
     ADD I, [B+BBFS_FILE_OFFSET]
@@ -546,7 +570,7 @@ bbfs_file_read:
     IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
     ADD SP, 1
-    
+   
     IFG A, 0x7FFF
         ; If the high bit is set, this was the last sector
         ; Maybe we filled it.
@@ -562,9 +586,11 @@ bbfs_file_read:
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
     JSR bbfs_device_get
     SET I, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
     ADD SP, 1
+    
+    IFE I, 0x0000
+        ; Couldn't get the sector
+        SET PC, .error_drive
     
     ; Load the number of words available to read in the sector from its FAT
     ; entry.
@@ -597,10 +623,15 @@ bbfs_file_read:
     ; Return the end of file error
     SET [Z], BBFS_ERR_EOF
     SET PC, .return
-    
+ 
 .error_stack:
     ; Return error on the stack
     SET [Z], POP
+    SET PC, .return    
+        
+.error_drive:
+    ; Couldn't get a sector pointer
+    SET [Z], BBFS_ERR_DRIVE
 
 .return:
     SET Y, POP
@@ -625,37 +656,36 @@ bbfs_file_seek:
 
     SET PUSH, A ; BBOS calls, scratch
     SET PUSH, B ; File struct address
-    SET PUSH, C ; Filesystem header struct address
-    SET PUSH, X ; Flag for if we need to re-load the sector at the end
-    SET PUSH, Y ; FAT addressing scratch
+    SET PUSH, C ; Filesystem device address
+    SET PUSH, X ; FAT scratch
+    SET PUSH, Y ; FS sector size
     
     ; We're going to decrement [Z] as we skip until it's 0
     
     ; Load the file struct address
     SET B, [Z+1]
-    ; And the FS header struct address
-    SET C, [B+BBFS_FILE_FILESYSTEM_HEADER]
+    ; And the FS volume struct address
+    SET C, [B+BBFS_FILE_VOLUME]
     
-    SET X, 0 ; By default we don't need to touch any data sectors
+    ; And the device address
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to get device for
+    JSR bbfs_volume_get_device
+    SET C, POP
     
-    ; We need to save the current sector if we need to skip more than a sector,
-    ; or if we need to skip less than a sector but we're too close to the end.
-    IFG [Z], BBFS_WORDS_PER_SECTOR
-        SET PC, .save_current_sector
-    SET A, [Z]
-    ADD A, [B+BBFS_FILE_OFFSET]
-    IFG A, BBFS_WORDS_PER_SECTOR
-        SET PC, .save_current_sector
+    ; And the sector size on the device
+    SET PUSH, C ; Arg 1: device
+    JSR bbfs_device_sector_size
+    SET Y, POP
     
 .skip_until_done:
     IFE [Z], 0 ; No more words to skip
         SET PC, .done_skipping
-    IFG [Z], BBFS_WORDS_PER_SECTOR
+    IFG [Z], Y
         ; We want to skip a whole sector or more
         SET PC, .go_to_next_sector
     SET A, [Z]
     ADD A, [B+BBFS_FILE_OFFSET]
-    IFG A, BBFS_WORDS_PER_SECTOR
+    IFG A, Y
         ; We want to skip an amount that would put us in the next sector
         SET PC, .go_to_next_sector
     
@@ -666,133 +696,114 @@ bbfs_file_seek:
     IFG [B+BBFS_FILE_OFFSET], [B+BBFS_FILE_MAX_OFFSET]
         ; We need to extend this sector's used words
         SET [B+BBFS_FILE_MAX_OFFSET], [B+BBFS_FILE_OFFSET]
+        
+    ; This will get committed to the FAT when we sync/close the file, if we
+    ; don't go beyond this sector before doing so.
     
     ; Loop around
     SET PC, .skip_until_done
     
-.save_current_sector:
-    ; Save the sector the file is at now
-    SET PUSH, B
-    JSR bbfs_file_flush
-    SET A, POP
-    IFN A, BBFS_ERR_NONE
-        ; Return whatever error we got
-        SET PC, .error_A
-        
-    ; Remember that we need to re-load the sector we're pointing to
-    SET X, 1
-        
-    SET PC, .skip_until_done
-
 .go_to_next_sector:
-    
+
     ; If we already have a next sector allocated, go to that one
-    ; Otherwise, allocate a new sector
-    
     ; Look in the FAT at the current sector
-    SET A, C
-    ADD A, BBFS_HEADER_FAT
-    ADD A, [B+BBFS_FILE_SECTOR]
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
+    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
+    JSR bbfs_volume_fat_get
+    SET A, POP
+    IFN [SP], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
     
-    IFG [A], 0x7FFF
-        ; High bit is set, so this is the last sector. ALlocate a new one.
+    IFG A, 0x7FFF
+        ; If the high bit is set, this was the last sector
+        ; Allocate a new sector
         SET PC, .allocate_sector
     
 .sector_available:
-    ; Now [A] holds the next sector, and any changes have been committed to disk
-    
-    ; Adjust how much we have to skip to account for jumping to the start of the
-    ; next sector. Note that this may underflow and then overflow back.
-    SUB [Z], BBFS_WORDS_PER_SECTOR
-    ADD [Z], [B+BBFS_FILE_OFFSET]
+    ; Now A holds the next sector, which is allocated and atatched to our file
     
     ; Point the file at the start of the new sector
-    SET [B+BBFS_FILE_SECTOR], [A]
+    SET [B+BBFS_FILE_SECTOR], A
     SET [B+BBFS_FILE_OFFSET], 0
     
-    SET PC, .skip_until_done
-    
-.allocate_sector:
-    ; We need to fill in [A] with a new sector and then commit the header
-    ; changes to disk.
-    
-    ; Find a free sector and save it there
-    SET PUSH, C ; Arg 1 - BBFS_HEADER to find a sector in
-    JSR bbfs_header_find_free_sector
-    SET Y, POP
-    
-    IFE Y, 0xFFFF
-        ; No free sector was available
-        SET PC, .error_space
-    ; Else we got a sector, point to it
-    SET [A], Y
-        
-    ; Allocate it
-    SET PUSH, C ; Arg 1 - BBFS_HEADER to update
-    SET PUSH, [A] ; Arg 2 - Sector to mark allocated
-    JSR bbfs_header_allocate_sector
-    ADD SP, 2
-    
-    ; Say it has no words used in its FAT entry.
-    ; First find that entry with Y.
-    SET Y, [B+BBFS_FILE_FILESYSTEM_HEADER]
-    ADD Y, BBFS_HEADER_FAT
-    ADD Y, [A]
-    
-    ; Set the high bit (sector is last in file), but leave the words used count
-    ; as 0. This will then get loaded into the file max offset when the sector
-    ; is loaded.
-    SET [Y], 0x8000
-    
-    ; Commit the filesystem changes to disk
-    SET PUSH, [B+BBFS_FILE_DRIVE] ; Drive number
-    SET PUSH, C ; Header pointer
-    JSR bbfs_drive_save
-    ADD SP, 2
-    ; TODO: catch drive errors
-    
-    ; Go back to updating the file offset and then skipping more
-    SET PC, .sector_available
-    
-.done_skipping:
-    
-    IFE X, 0
-        ; We stayed in the same sector
-        SET PC, .no_reload
-        
-    ; Load up the sector that the file points at.
-    ; Clobber A with the BBOS call
-    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 1: Sector to read
-    SET PUSH, B ; Arg 2: Pointer to write to
-    ADD [SP], BBFS_FILE_BUFFER
-    SET PUSH, [B+BBFS_FILE_DRIVE] ; Arg 3: Drive to read from
-    SET A, READ_DRIVE_SECTOR
-    INT BBOS_IRQ_MAGIC
-    ; TODO: handle drive errors
-    ADD SP, 3
-    
-    ; Load the number of words available to read in the sector. We'll point A to
+    ; Load the number of words available to read in the sector. We'll set A to
     ; the new sector's FAT entry.
     ; Find the FS header
-    SET A, [B+BBFS_FILE_FILESYSTEM_HEADER]
-    ; And the FAT in it
-    ADD A, BBFS_HEADER_FAT
-    ; And the entry for this sector in the FAT
-    ADD A, [B+BBFS_FILE_SECTOR]
-    
-    ; Load out the value
-    SET A, [A]
-    
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
+    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
+    JSR bbfs_volume_fat_get
+    SET A, POP
+    IFN [SP], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
+     
     IFL A, 0x8000
         ; The high bit is unset, so this sector is not the last and is
-        ; guaranteed to be full
-        SET A, BBFS_WORDS_PER_SECTOR
+        ; guaranteed to be full. Use the sector size we grabbed earlier.
+        SET A, Y
     
     AND A, 0x7FFF ; Take everything but the high bit
     ; And say that that's the current file length within this sector.
     SET [B+BBFS_FILE_MAX_OFFSET], A 
     
-.no_reload:
+    ; Keep seeking
+    SET PC, .skip_until_done
+    
+.allocate_sector:
+    ; We need to fill in A with a new sector and then commit the header
+    ; changes to disk.
+    
+    ; Find a free sector and save it there
+    SET PUSH, C ; Arg 1 - BBFS_HEADER to find a sector in
+    JSR bbfs_header_find_free_sector
+    SET X, POP
+    
+    IFE X, 0xFFFF
+        ; No free sector was available
+        SET PC, .error_space
+    ; Else we got a sector, point to it
+    
+    ; Otherwise we got a free one.
+    SET A, X
+    
+    ; Point to it in the FAT
+    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector to set FAT of (current)
+    SET PUSH, A ; Arg 3: new FAT value (new sector to point to)
+    JSR bbfs_volume_fat_set
+    SET X, POP
+    ADD SP, 2
+    IFN X, BBFS_ERR_NONE
+        SET PC, .error_x
+    
+    ; Allocate it
+    SET PUSH, C ; Arg 1 - BBFS_VOLUME to update
+    SET PUSH, A ; Arg 2 - Sector to mark allocated
+    JSR bbfs_volume_allocate_sector
+    SET X, POP
+    ADD SP, 1
+    IFN X, BBFS_ERR_NONE
+        SET PC, .error_x
+    
+    
+    ; Say it has no words used in its FAT entry.
+    ; Set the high bit (sector is last in file), but leave the words used count
+    ; as 0. This will then get loaded into the file max offset when the sector
+    ; is loaded above.
+    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, A ; Arg 2: sector to set FAT of (new)
+    SET PUSH, 0x8000 ; Arg 3: new FAT value (no words used/high bit set)
+    JSR bbfs_volume_fat_set
+    SET X, POP
+    ADD SP, 2
+    IFN X, BBFS_ERR_NONE
+        SET PC, .error_x
+    
+    ; Go back to seeking through this next sector (A)
+    SET PC, .sector_available
+    
+.done_skipping:
     ; Return success
     SET [Z], BBFS_ERR_NONE
     SET PC, .return
@@ -802,12 +813,21 @@ bbfs_file_seek:
     SET [Z], A
     SET PC, .return
     
+.error_x:
+    ; Return the error in x
+    SET [Z], X
+    SET PC, .return
+    
+.error_stack:
+    ; Return the error from the stack
+    SET [Z], POP
+    SET PC, .return
+    
 .error_space:
     ; Return the out of space error
     SET [Z], BBFS_ERR_DISC_FULL
 
 .return:
-    SET Y, POP
     SET X, POP
     SET C, POP
     SET B, POP
@@ -826,62 +846,84 @@ bbfs_file_truncate:
     ADD Z, 2
     
     SET PUSH, A ; File struct
-    SET PUSH, B ; Header struct
+    SET PUSH, B ; Volume struct
     SET PUSH, C ; Current sector number
-    SET PUSH, X ; Scratch
+    SET PUSH, X ; Scratch/next sector
+    SET PUSH, Y ; Other scratch
     
     ; Load the file struct address
     SET A, [Z]
     ; Load the filesystem header address
-    SET B, [A+BBFS_FILE_FILESYSTEM_HEADER]
+    SET B, [A+BBFS_FILE_VOLUME]
     ; Load the current sector
     SET C, [A+BBFS_FILE_SECTOR]
     
 .loop:
     ; Get the next sector from the FAT
-    SET X, B
-    ADD X, BBFS_HEADER_FAT
-    ADD X, C
-    IFG [X], 0x7FFF
+    
+    SET PUSH, B ; Arg 1 - volume to work on
+    SET PUSH, C ; Arg 2 - sector to look up
+    JSR bbfs_volume_fat_get
+    SET X, POP ; Stick the value in X
+    IFN [Z], BBFS_ERR_NONE
+        SET PC, .error_stack
+    ADD SP, 1
+    
+    ; Clear out the link or size
+    SET PUSH, B ; Arg 1 - volume to work on
+    SET PUSH, C ; Arg 2 - sector to set
+    SET PUSH, 0xFFFF ; Arg 3 - value to point it at (0xFFFF = sector is free)
+    IFE C, [A+BBFS_FILE_SECTOR]
+        ; If this is the first sector, actually just mark it as empty but used.
+        ; Real word count will be filled in in the FAT when the file is synced.
+        SET [SP], 0x8000
+    JSR bbfs_volume_fat_set
+    SET Y, POP
+    ADD SP, 2
+    IFN Y, BBFS_ERR_NONE
+        SET PC, .error_y
+        
+    IFG X, 0x7FFF
         ; We're already the last sector
         SET PC, .done
     
-    ; Move to that sector and clear out the link from this one.
-    SET C, [X]
-    SET [X], 0xFFFF
+    ; Move to that sector
+    SET C, X
     
-    ; Mark that sector as free
-    SET PUSH, B
-    SET PUSH, C
-    JSR bbfs_header_free_sector
-    ADD SP, 2
+    ; Mark that sector as free in the bitmap
+    SET PUSH, B ; Arg 1: volume to work on
+    SET PUSH, C ; Arg 2: sector to free
+    JSR bbfs_volume_free_sector
+    SET Y, POP
+    ADD SP, 1
+    IFN Y, BBFS_ERR_NONE
+        SET PC, .error_y
     
-    ; Keep going until we've freed the sector that already pointed to 0xFFFF at
-    ; the end of the file.
+    ; Keep going until we've freed the sector that didn't point to another
+    ; sector
     SET PC, .loop
     
 .done:
-    ; Fix up the last sector to be unused, not just partially filled (0xFFFF)
-    SET [X], 0xFFFF
     
     ; Set the file's max offset to its current offset
     SET [A+BBFS_FILE_MAX_OFFSET], [A+BBFS_FILE_OFFSET]
     
-    ; This is now the last sector, so update the FAT for it to note the number
-    ; of words used.
-    SET X, B
-    ADD X, BBFS_HEADER_FAT
-    ADD X, [A+BBFS_FILE_SECTOR]
-    SET [X], [A+BBFS_FILE_MAX_OFFSET] ; Put in the word count
-    BOR [X], 0x8000 ; Set the high bit to mark this as the last sector
-
-    ; Commit the changes to disk
-    SET PUSH, [A+BBFS_FILE_DRIVE]
-    SET PUSH, B
-    JSR bbfs_drive_save
-    ADD SP, 2
+    ; This sector's FAT entry is already 0x8000 as if it was just allocated.
+    ; Actual size will be filled in in FAT on flush.
 
     SET [Z], BBFS_ERR_NONE
+    SET PC, .return
+    
+.error_stack:
+    SET [Z], POP
+    SET PC, .return
+    
+.error_y:
+    SET [Z], Y
+    SET PC, .return
+    
+.return:
+    SET Y, POP
     SET X, POP
     SET C, POP
     SET B, POP
@@ -890,7 +932,7 @@ bbfs_file_truncate:
     SET PC, POP
     
 ; bbfs_file_delete(*file)
-; Delete the given open file.
+; Delete the given open file. File should not be flushed afterwards.
 ; [Z]: BBFS_FILE struct
 ; Returns: error code in [Z]
 bbfs_file_delete:
@@ -900,7 +942,7 @@ bbfs_file_delete:
     ADD Z, 2
     
     SET PUSH, A ; File struct
-    SET PUSH, B ; FAT addressing scratch
+    SET PUSH, B ; FAT scratch
     
     SET A, [Z] ; Load up the file struct
     
@@ -916,23 +958,23 @@ bbfs_file_delete:
         SET PC, .return
         
     ; Now set the FAT on the last sector to 0xFFFF (for unused)
-    SET B, [A+BBFS_FILE_FILESYSTEM_HEADER]
-    ADD B, BBFS_HEADER_FAT
-    ADD B, [A+BBFS_FILE_SECTOR]
-    SET [B], 0xFFFF
-    
+    SET PUSH, [A+BBFS_FILE_VOLUME] ; Arg 1 - volume to work on
+    SET PUSH, [A+BBFS_FILE_START_SECTOR] ; Arg 2 - sector to set
+    SET PUSH, 0xFFFF ; Arg 3 - value to point it at (0xFFFF = sector is free)
+    JSR bbfs_volume_fat_set
+    SET [Z], POP
+    ADD SP, 2
+    IFN [Z], BBFS_ERR_NONE
+        SET PC, .return
         
     ; Now free the last sector in the bitmap
-    SET PUSH, [A+BBFS_FILE_FILESYSTEM_HEADER]
-    SET PUSH, [A+BBFS_FILE_START_SECTOR]
-    JSR bbfs_header_free_sector
-    ADD SP, 2
-    
-    ; Save FS header to the drive
-    SET PUSH, [A+BBFS_FILE_DRIVE]
-    SET PUSH, [A+BBFS_FILE_FILESYSTEM_HEADER]
-    JSR bbfs_drive_save
-    ADD SP, 2
+    SET PUSH, [A+BBFS_FILE_VOLUME] ; Arg 1: volume to work on
+    SET PUSH, [A+BBFS_FILE_START_SECTOR] ; Arg 2: sector to free
+    JSR bbfs_volume_free_sector
+    SET [Z], POP
+    ADD SP, 1
+    IFN [Z], BBFS_ERR_NONE
+        SET PC, .return
 
     ; Now we're done    
     SET [Z], BBFS_ERR_NONE
@@ -942,7 +984,7 @@ bbfs_file_delete:
     SET Z, POP
     SET PC, POP
     
-    
+ 
     
     
 
