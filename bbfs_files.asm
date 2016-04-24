@@ -327,7 +327,7 @@ bbfs_file_write:
         ; We need to expand the part of this sector used by bumping up the max
         ; offset in this sector.
         SET [B+BBFS_FILE_MAX_OFFSET], [B+BBFS_FILE_OFFSET]
-        
+    
     ; This will get committed to the FAT when we sync/close the file, if we
     ; don't go beyond this sector before doing so.
     
@@ -360,7 +360,7 @@ bbfs_file_write:
     
     ; Load the number of words available to read in the sector. We'll set A to
     ; the new sector's FAT entry.
-    ; Find the FS header
+    ; Find the FS volume
     SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
     JSR bbfs_volume_fat_get
@@ -384,7 +384,7 @@ bbfs_file_write:
     JSR bbfs_device_get
     SET I, POP
     ADD SP, 1
-    
+
     IFE I, 0x0000
         ; Couldn't get the sector
         SET PC, .error_drive
@@ -393,12 +393,11 @@ bbfs_file_write:
     SET PC, .write_until_full
     
 .allocate_sector:
-    ; We need to fill in A with a new sector and then commit the header
-    ; changes to disk.
+    ; We need to fill in A with a new sector
     
     ; Find a free sector and save it there
-    SET PUSH, C ; Arg 1 - BBFS_HEADER to find a sector in
-    JSR bbfs_header_find_free_sector
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1 - BBFS_VOLUME to find a sector in
+    JSR bbfs_volume_find_free_sector
     SET X, POP
     
     IFE X, 0xFFFF
@@ -410,7 +409,7 @@ bbfs_file_write:
     SET A, X
     
     ; Point to it in the FAT
-    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to change the FAT in
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector to set FAT of (current)
     SET PUSH, A ; Arg 3: new FAT value (new sector to point to)
     JSR bbfs_volume_fat_set
@@ -418,9 +417,9 @@ bbfs_file_write:
     ADD SP, 2
     IFN X, BBFS_ERR_NONE
         SET PC, .error_x
-    
+        
     ; Allocate it
-    SET PUSH, C ; Arg 1 - BBFS_VOLUME to update
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1 - BBFS_VOLUME to update
     SET PUSH, A ; Arg 2 - Sector to mark allocated
     JSR bbfs_volume_allocate_sector
     SET X, POP
@@ -433,7 +432,7 @@ bbfs_file_write:
     ; Set the high bit (sector is last in file), but leave the words used count
     ; as 0. This will then get loaded into the file max offset when the sector
     ; is loaded above.
-    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to change the FAT in
     SET PUSH, A ; Arg 2: sector to set FAT of (new)
     SET PUSH, 0x8000 ; Arg 3: new FAT value (no words used/high bit set)
     JSR bbfs_volume_fat_set
@@ -729,7 +728,7 @@ bbfs_file_seek:
     
     ; Load the number of words available to read in the sector. We'll set A to
     ; the new sector's FAT entry.
-    ; Find the FS header
+    ; Find the FS volume
     SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
     JSR bbfs_volume_fat_get
@@ -751,12 +750,11 @@ bbfs_file_seek:
     SET PC, .skip_until_done
     
 .allocate_sector:
-    ; We need to fill in A with a new sector and then commit the header
-    ; changes to disk.
+    ; We need to fill in A with a new sector
     
     ; Find a free sector and save it there
-    SET PUSH, C ; Arg 1 - BBFS_HEADER to find a sector in
-    JSR bbfs_header_find_free_sector
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1 - BBFS_VOLUME to find a sector in
+    JSR bbfs_volume_find_free_sector
     SET X, POP
     
     IFE X, 0xFFFF
@@ -768,7 +766,7 @@ bbfs_file_seek:
     SET A, X
     
     ; Point to it in the FAT
-    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to change the FAT in
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector to set FAT of (current)
     SET PUSH, A ; Arg 3: new FAT value (new sector to point to)
     JSR bbfs_volume_fat_set
@@ -778,7 +776,7 @@ bbfs_file_seek:
         SET PC, .error_x
     
     ; Allocate it
-    SET PUSH, C ; Arg 1 - BBFS_VOLUME to update
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1 - BBFS_VOLUME to update
     SET PUSH, A ; Arg 2 - Sector to mark allocated
     JSR bbfs_volume_allocate_sector
     SET X, POP
@@ -791,7 +789,7 @@ bbfs_file_seek:
     ; Set the high bit (sector is last in file), but leave the words used count
     ; as 0. This will then get loaded into the file max offset when the sector
     ; is loaded above.
-    SET PUSH, C ; Arg 1: volume to change the FAT in
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume to change the FAT in
     SET PUSH, A ; Arg 2: sector to set FAT of (new)
     SET PUSH, 0x8000 ; Arg 3: new FAT value (no words used/high bit set)
     JSR bbfs_volume_fat_set
@@ -828,6 +826,7 @@ bbfs_file_seek:
     SET [Z], BBFS_ERR_DISC_FULL
 
 .return:
+    SET Y, POP
     SET X, POP
     SET C, POP
     SET B, POP
@@ -853,7 +852,7 @@ bbfs_file_truncate:
     
     ; Load the file struct address
     SET A, [Z]
-    ; Load the filesystem header address
+    ; Load the filesystem volume address
     SET B, [A+BBFS_FILE_VOLUME]
     ; Load the current sector
     SET C, [A+BBFS_FILE_SECTOR]
@@ -865,7 +864,7 @@ bbfs_file_truncate:
     SET PUSH, C ; Arg 2 - sector to look up
     JSR bbfs_volume_fat_get
     SET X, POP ; Stick the value in X
-    IFN [Z], BBFS_ERR_NONE
+    IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
     ADD SP, 1
     

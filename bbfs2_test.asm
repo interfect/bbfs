@@ -371,11 +371,82 @@ start:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    ; Make a file
+    ; Flush
     SET PUSH, file
     JSR bbfs_file_flush
     SET A, POP
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Repoen it
+    SET PUSH, str_file_reopen
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, file
+    JSR bbfs_file_reopen
+    SET A, POP
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Seek ahead
+    SET PUSH, str_file_seek
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, file ; Arg 1: file
+    SET PUSH, 177 ; Arg 2: distance
+    JSR bbfs_file_seek
+    SET A, POP
     ADD SP, 1
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Read from it
+    SET PUSH, str_file_read
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, file ; Arg 1: file
+    SET PUSH, read_buffer ; Arg 2: buffer
+    SET PUSH, 131 ; Arg 3: characters
+    JSR bbfs_file_read 
+    SET A, POP
+    ADD SP, 2
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Null-terminate string
+    SET [read_buffer+132], 0
+    
+    ; Print it
+    SET PUSH, read_buffer
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+        
+    ; Delete it
+    SET PUSH, str_file_delete
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Delete
+    SET PUSH, file
+    JSR bbfs_file_delete
+    SET A, POP
     
     IFN A, BBFS_ERR_NONE
         SET PC, fail
@@ -457,13 +528,21 @@ str_file_write:
     ASCIIZ "Writing to file..."
 str_file_flush:
     ASCIIZ "Flushing..."
+str_file_reopen:
+    ASCIIZ "Re-opening file..."
+str_file_seek:
+    ASCIIZ "Seeking..."
+str_file_read:
+    ASCIIZ "Reading..."
+str_file_delete:
+    ASCIIZ "Deleting file..."
 str_done:
     ASCIIZ "Done!"
 str_fail:
     ASCIIZ "Failed!"
 
 str_file_contents:
-    ASCIIZ "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal."
+    ASCIIZ "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure. We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live. It is altogether fitting and proper that we should do this."
 file_contents_end:
 
 ; Mark the end of the program data
@@ -478,6 +557,8 @@ volume:
 RESERVE BBFS_VOLUME_SIZEOF
 file:
 RESERVE BBFS_FILE_SIZEOF
+read_buffer:
+RESERVE 512
 
 bootloader_code:
 ; Include the BBFS bootloader assembled code. On the final disk the bootloader
