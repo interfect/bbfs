@@ -16,6 +16,43 @@ define BBOS_BOOTLOADER_MAGIC_POSITION 511
 .org 0
 
 start:
+    ; Say we're opening a device
+    SET PUSH, str_device_open
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Open the device
+    SET PUSH, device ; Arg 1: device to construct
+    SET PUSH, 0 ; Arg 2: drive to work on (0)
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    
+    ; We should have no error
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Open up the disk as a volume
+    SET PUSH, str_volume_open
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Do it
+    SET PUSH, volume ; Arg 1: volume
+    SET PUSH, device ; Arg 2: device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    
+    ; It may be unformatted but otherwise should be OK.
+    IFN A, BBFS_ERR_UNFORMATTED
+        IFN A, BBFS_ERR_NONE
+            SET PC, fail
+    
     ; Say we're formatting
     SET PUSH, str_formatting
     SET PUSH, 1 ; With newline
@@ -23,36 +60,12 @@ start:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    ; Format the header in memory
-    SET PUSH, header
-    JSR bbfs_header_format
-    ADD SP, 1
-    
-    ; Say we're saving the header
-    SET PUSH, str_saving
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Save it to the drive
-    SET PUSH, 0 ; Use drive 0
-    SET PUSH, header
-    JSR bbfs_drive_save
-    ADD SP, 2
-    
-    ; Say we're loading the header
-    SET PUSH, str_loading
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Load it back from the drive
-    SET PUSH, 0 ; Use drive 0
-    SET PUSH, header
-    JSR bbfs_drive_load
-    ADD SP, 2
+    ; Format the volume
+    SET PUSH, volume
+    JSR bbfs_volume_format
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
     
     ; Say we're looking for a free sector
     SET PUSH, str_find_free
@@ -62,8 +75,8 @@ start:
     ADD SP, 2
     
     ; Find a free sector and keep it in A for debugging
-    SET PUSH, header
-    JSR bbfs_header_find_free_sector
+    SET PUSH, volume
+    JSR bbfs_volume_find_free_sector
     SET A, POP
     
     ; It should always be sector 4 (after the 4 reserved for boot and FS)
@@ -79,7 +92,7 @@ start:
     
     ; Make a file
     SET PUSH, file
-    SET PUSH, header
+    SET PUSH, volume
     SET PUSH, 0
     JSR bbfs_file_create
     SET A, POP
@@ -96,8 +109,8 @@ start:
     ADD SP, 2
     
     ; Find a free sector and keep it in A for debugging
-    SET PUSH, header
-    JSR bbfs_header_find_free_sector
+    SET PUSH, volume
+    JSR bbfs_volume_find_free_sector
     SET A, POP
     
     ; It should always be sector 5 (after the 4 reserved for boot and FS and the
@@ -157,7 +170,7 @@ write_loop:
     SET A, [A]
     ; Open the file again to go back to the start
     SET PUSH, file
-    SET PUSH, header
+    SET PUSH, volume
     SET PUSH, 0
     SET PUSH, A
     JSR bbfs_file_open
@@ -295,7 +308,7 @@ write_loop:
     
     ; Create a directory
     SET PUSH, directory
-    SET PUSH, header
+    SET PUSH, volume
     SET PUSH, 0
     JSR bbfs_directory_create
     SET A, POP
@@ -314,7 +327,7 @@ write_loop:
     
     ; Make a file
     SET PUSH, file
-    SET PUSH, header
+    SET PUSH, volume
     SET PUSH, 0
     JSR bbfs_file_create
     SET A, POP
@@ -386,7 +399,7 @@ write_loop:
     ADD SP, 2
     ; Do it
     SET PUSH, directory ; Arg 1: directory
-    SET PUSH, header ; Arg 2: BBFS_HEADER
+    SET PUSH, volume ; Arg 2: BBFS_VOLUME
     SET PUSH, 0 ; Arg 3: drive
     ; Arg 4: sector
     SET PUSH, [directory+BBFS_DIRECTORY_FILE+BBFS_FILE_START_SECTOR]
@@ -541,6 +554,10 @@ fail:
 #include "bbfs.asm"
 
 ; Strings
+str_device_open:
+    ASCIIZ "Opening device..."
+str_volume_open:
+    ASCIIZ "Opening volume..."
 str_formatting:
     ASCIIZ "Formatting..."
 str_loading:
@@ -601,9 +618,11 @@ str_fail:
 ; Mark the end of the program data
 program_end:
 
-; Reserve space for the filesystem header
-header:
-RESERVE BBFS_HEADER_SIZEOF
+; Reserve space for the filesystem stuff
+device:
+RESERVE BBFS_DEVICE_SIZEOF
+volume:
+RESERVE BBFS_VOLUME_SIZEOF
 file:
 RESERVE BBFS_FILE_SIZEOF
 buffer:

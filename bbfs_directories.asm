@@ -1,10 +1,10 @@
 ; bbfs_directories.asm
 ; Implementation of directories as files pointing to sectors.
 
-; bbfs_directory_create(*directory, *header, drive_num)
+; bbfs_directory_create(*directory, *volume, drive_num)
 ; Make a new directory.
 ; [Z+2]: BBFS_DIRECTORY handle
-; [Z+1]: BBFS_HEADER
+; [Z+1]: BBFS_VOLUME to make the directory on
 ; [Z]: drive number
 ; Returns: error code in [Z]
 bbfs_directory_create:
@@ -27,7 +27,7 @@ bbfs_directory_create:
     
     ; Make the file
     SET PUSH, B ; Arg 1: file
-    SET PUSH, [Z+1] ; Arg 2: FS header
+    SET PUSH, [Z+1] ; Arg 2: FS volume
     SET PUSH, [Z] ; Arg 3: drive number
     JSR bbfs_file_create
     SET A, POP
@@ -75,10 +75,10 @@ bbfs_directory_create:
     SET Z, POP
     SET PC, POP
     
-; bbfs_directory_open(*directory, *header, drive_num, sector_num)
+; bbfs_directory_open(*directory, *volume, drive_num, sector_num)
 ; Open an existing directory on disk,
 ; [Z+3]: BBFS_DIRECTORY to open into
-; [Z+2]: BBFS_HEADER for the filesystem
+; [Z+2]: BBFS_VOLUME for the filesystem
 ; [Z+1]: drive number to open from
 ; [Z]: sector defining the directory's file.
 ; Returns: error code in [Z]
@@ -104,7 +104,7 @@ bbfs_directory_open:
     
     ; Open the file
     SET PUSH, B ; Arg 1: BBFS_FILE to populate
-    SET PUSH, [Z+2] ; Arg 2: BBFS_HEADER for the filesystem
+    SET PUSH, [Z+2] ; Arg 2: BBFS_VOLUME for the filesystem
     SET PUSH, [Z+1] ; Arg 3: drive number
     SET PUSH, [Z] ; Arg 4: sector defining file
     JSR bbfs_file_open
