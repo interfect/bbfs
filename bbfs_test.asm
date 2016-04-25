@@ -93,10 +93,9 @@ start:
     ; Make a file
     SET PUSH, file
     SET PUSH, volume
-    SET PUSH, 0
     JSR bbfs_file_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     
     IFN A, BBFS_ERR_NONE
         SET PC, fail
@@ -171,11 +170,10 @@ write_loop:
     ; Open the file again to go back to the start
     SET PUSH, file
     SET PUSH, volume
-    SET PUSH, 0
     SET PUSH, A
     JSR bbfs_file_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     
     IFN A, BBFS_ERR_NONE
         SET PC, fail
@@ -309,10 +307,9 @@ write_loop:
     ; Create a directory
     SET PUSH, directory
     SET PUSH, volume
-    SET PUSH, 0
     JSR bbfs_directory_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, fail
         
@@ -328,7 +325,6 @@ write_loop:
     ; Make a file
     SET PUSH, file
     SET PUSH, volume
-    SET PUSH, 0
     JSR bbfs_file_create
     SET A, POP
     ADD SP, 2
@@ -400,12 +396,11 @@ write_loop:
     ; Do it
     SET PUSH, directory ; Arg 1: directory
     SET PUSH, volume ; Arg 2: BBFS_VOLUME
-    SET PUSH, 0 ; Arg 3: drive
-    ; Arg 4: sector
+    ; Arg 3: sector
     SET PUSH, [directory+BBFS_DIRECTORY_FILE+BBFS_FILE_START_SECTOR]
     JSR bbfs_directory_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, fail
         

@@ -704,6 +704,10 @@ bbfs_file_seek:
     
 .go_to_next_sector:
 
+    ; First, account for all the words we're skipping: all the ones left in the sector.
+    SUB [Z], Y ; A whole sector
+    ADD [Z], [B+BBFS_FILE_OFFSET] ; Except what we had already passed
+
     ; If we already have a next sector allocated, go to that one
     ; Look in the FAT at the current sector
     SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
@@ -736,7 +740,7 @@ bbfs_file_seek:
     IFN [SP], BBFS_ERR_NONE
         SET PC, .error_stack
     ADD SP, 1
-     
+    
     IFL A, 0x8000
         ; The high bit is unset, so this sector is not the last and is
         ; guaranteed to be full. Use the sector size we grabbed earlier.

@@ -3,9 +3,8 @@
 
 ; bbfs_directory_create(*directory, *volume, drive_num)
 ; Make a new directory.
-; [Z+2]: BBFS_DIRECTORY handle
-; [Z+1]: BBFS_VOLUME to make the directory on
-; [Z]: drive number
+; [Z+1]: BBFS_DIRECTORY handle
+; [Z]: BBFS_VOLUME to make the directory on
 ; Returns: error code in [Z]
 bbfs_directory_create:
     ; Set up frame pointer
@@ -18,7 +17,7 @@ bbfs_directory_create:
     SET PUSH, C ; BBFS_DIRHEADER we set up to write in.
     
     ; Set B to the BBFS_FILE for the directory
-    SET B, [Z+2]
+    SET B, [Z+1]
     ADD B, BBFS_DIRECTORY_FILE
     
     ; Set C to a BBFS_DIRHEADER on the stack
@@ -27,11 +26,10 @@ bbfs_directory_create:
     
     ; Make the file
     SET PUSH, B ; Arg 1: file
-    SET PUSH, [Z+1] ; Arg 2: FS volume
-    SET PUSH, [Z] ; Arg 3: drive number
+    SET PUSH, [Z] ; Arg 2: FS volume
     JSR bbfs_file_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         ; Report an error
         SET PC, .error_A
@@ -77,9 +75,8 @@ bbfs_directory_create:
     
 ; bbfs_directory_open(*directory, *volume, drive_num, sector_num)
 ; Open an existing directory on disk,
-; [Z+3]: BBFS_DIRECTORY to open into
-; [Z+2]: BBFS_VOLUME for the filesystem
-; [Z+1]: drive number to open from
+; [Z+2]: BBFS_DIRECTORY to open into
+; [Z+1]: BBFS_VOLUME for the filesystem
 ; [Z]: sector defining the directory's file.
 ; Returns: error code in [Z]
 bbfs_directory_open:
@@ -92,10 +89,10 @@ bbfs_directory_open:
     SET PUSH, B ; BBFS_FILE for the directory
     SET PUSH, C ; BBFS_DIRHEADER we set up to read out
     
-    SET A, [Z+3]
+    SET A, [Z+2]
     
     ; Set B to the BBFS_FILE for the directory
-    SET B, [Z+3]
+    SET B, [Z+2]
     ADD B, BBFS_DIRECTORY_FILE
     
     ; Set C to a BBFS_DIRHEADER on the stack
@@ -104,12 +101,11 @@ bbfs_directory_open:
     
     ; Open the file
     SET PUSH, B ; Arg 1: BBFS_FILE to populate
-    SET PUSH, [Z+2] ; Arg 2: BBFS_VOLUME for the filesystem
-    SET PUSH, [Z+1] ; Arg 3: drive number
-    SET PUSH, [Z] ; Arg 4: sector defining file
+    SET PUSH, [Z+1] ; Arg 2: BBFS_VOLUME for the filesystem
+    SET PUSH, [Z] ; Arg 3: sector defining file
     JSR bbfs_file_open
     SET [Z], POP
-    ADD SP, 3
+    ADD SP, 2
     IFN [Z], BBFS_ERR_NONE
         SET PC, .return
         
