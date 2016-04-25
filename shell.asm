@@ -57,11 +57,10 @@ define BBOS_BOOTLOADER_MAGIC_POSITION 511
 ; BBOS likes to load at 0xF000. If we could relocate ourselves, we could just
 ; ask it where to load.
 
-; This leaves us 8k for code above, and 45k for user/loaded code below.
-define SHELL_CODE_START 0xB000 
+; This leaves us 12k for code above, and 40k for user/loaded code below.
+define SHELL_CODE_START 0xA000 
 
-; This leaves us a bit under 8k for data and BBOS's VRAM. We have like 5k with
-; all those sector buffers.
+; This leaves us a bit under 8k for data and BBOS's VRAM.
 define SHELL_DATA_START 0xD000
 
 ; TODO: develop a bank switching peripheral to swap out 8k banks or something.
@@ -80,7 +79,7 @@ zero:
     SUB C, 1
     IFN C, 0
         SET PC, .copy_loop
-        
+    
     ; Jump to the code we just moved into place
     SET PC, start
     
@@ -90,6 +89,11 @@ moveable_start: ; This is where we read our real code from
 
 start:
     ; Now we're running in place.
+    
+    ; Sanity check: make sure the end of our code copied. We expect a set PC, nextword here
+    ; If not, jump there and explode
+    IFN [halt], 0x7f81
+        SET PC, halt
 
     ; Save the code that just moved us, in case we need it for format.
     SET I, zero
@@ -100,7 +104,7 @@ start:
     SUB C, 1
     IFN C, 0
         SET PC, .copy_loop
-
+        
     ; The drive we loaded off of is in A.
     SET [drive], A
     
@@ -147,11 +151,13 @@ command_loop:
 ; shell_exec(*command, drive_number)
 ;   Try executing the command in the given buffer, by first going through
 ;   builtins and then out to the given disk for .COM files.
-; shell_open(*header, *file, *filename, create)
-;   Populate a header and a file object by opening the given file object on the
-;   appropriate drive (either the current one or one derived from a leading A:\
-;   in the filename). Clobbers the global directory and dirinfo space. If create
-;   is specified, creates the file if it can't be found. Returns an error code.
+; shell_open(*file, *filename, create)
+;   Populate a file object by opening the given file object on the appropriate
+;   drive (either the current one or one derived from a leading A:\ in the
+;   filename). Clobbers the global directory and dirinfo space, and may
+;   initialize drive2, device2, and volume2 if needed. If create is specified,
+;   creates the file if it can't be found. Returns an error code, and the file
+;   index in the global directory if found.
 ; shell_resolve_drive(character)
 ;   Turn a drive letter into a drive number, or 0xFFFF if a bad drive letter.
 
@@ -780,27 +786,39 @@ shell_builtin_format:
         
     ; Now we can actually do the work.
     
-    ; Make a filesystem
-    
-    ; Format the header
-    SET PUSH, header ; Arg 1: header pointer
-    JSR bbfs_header_format
+    ; Open the main device on this drive
+    SET PUSH, device
+    SET PUSH, B
+    JSR bbfs_device_open
+    SET A, POP
     ADD SP, 1
-    
-    ; Save the header to the disk
-    SET PUSH, B ; Arg 1: drive number
-    SET PUSH, header ; Arg 2: header pointer
-    JSR bbfs_drive_save
-    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
+    ; And open the main volume on that device
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        IFN A, BBFS_ERR_UNFORMATTED
+            SET PC, .error_unknown    
+            
+    ; Format the volume
+    SET PUSH, volume
+    JSR bbfs_volume_format
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
     
     ; Make a root directory.
     ; Since it's the first thing on the disk it ends up at the right sector.
     SET PUSH, directory ; Arg 1: directory handle to open
-    SET PUSH, header ; Arg 2: header to make the directory in
-    SET PUSH, B ; Arg 3: drive to work on
+    SET PUSH, volume ; Arg 2: volume to make the directory on
     JSR bbfs_directory_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
     
@@ -808,11 +826,10 @@ shell_builtin_format:
     ; Make a file
     
     SET PUSH, file ; Arg 1: file struct to populate
-    SET PUSH, header ; Arg 2: header to work in
-    SET PUSH, B ; Arg 3: drive to work on
+    SET PUSH, volume ; Arg 2: volume to work in
     JSR bbfs_file_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
         
@@ -859,7 +876,7 @@ shell_builtin_format:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
         
-    ; And flush
+    ; And flush. This syncs the device.
     SET PUSH, file
     JSR bbfs_file_flush
     SET A, POP
@@ -1044,19 +1061,32 @@ shell_builtin_dir:
     SET B, [drive] ; Load the drive number
 .drive_ready:
     
-    ; Load the header
-    SET PUSH, B ; Arg 1: drive number
-    SET PUSH, header ; Arg 2: header to populate
-    JSR bbfs_drive_load
-    ADD SP, 2
+    ; Set up main drive device
+    SET PUSH, device
+    SET PUSH, B
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
+    ; And main drive volume
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_unknown
+        
     ; Open the directory
     SET PUSH, directory ; Arg 1: directory
-    SET PUSH, header ; Arg 2: BBFS_HEADER
-    SET PUSH, B ; Arg 3: drive
-    SET PUSH, BBFS_ROOT_DIRECTORY ; Arg 4: sector
+    SET PUSH, volume ; Arg 2: BBFS_VOLUME
+    SET PUSH, volume ; Arg 3: find the root directory sector
+    JSR bbfs_volume_get_first_usable_sector
     JSR bbfs_directory_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_unknown
         
@@ -1263,30 +1293,53 @@ shell_builtin_copy:
     
     ; We have now parsed our arguments
     
+    ; Set up filesystem globals
+    ; Drive2 is currently unused
+    SET [drive2], 0xFFFF
+    
+    ; Set up main drive device
+    SET PUSH, device
+    SET PUSH, [drive]
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; And main drive volume
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
     ; Open the first file, not creating
-    ; shell_open(*header, *file, *filename, create)
-    SET PUSH, header ; Arg 1: header to populate
-    SET PUSH, file ; Arg 2: file to populate
-    SET PUSH, [Z] ; Arg 3: unpacked filename string
-    SET PUSH, 0 ; Arg 4: create flag
+    ; shell_open(*file, *filename, create)
+    SET PUSH, file ; Arg 1: file to populate
+    SET PUSH, [Z] ; Arg 2: unpacked filename string
+    SET PUSH, 0 ; Arg 3: create flag
     JSR shell_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
     ; Open the second file, creating
-    SET PUSH, header2 ; Arg 1: header to populate
-    SET PUSH, file2 ; Arg 2: file to populate
-    SET PUSH, C ; Arg 3: unpacked filename string
-    SET PUSH, 1 ; Arg 4: create flag
+    SET PUSH, file2 ; Arg 1: file to populate
+    SET PUSH, C ; Arg 2: unpacked filename string
+    SET PUSH, 1 ; Arg 3: create flag
     JSR shell_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
-    IFE [file+BBFS_FILE_DRIVE], [file2+BBFS_FILE_DRIVE]
+    ; TODO: what if the two files are on different, non-main drives? shell_open
+    ; will get confused.
+        
+    IFE [file+BBFS_FILE_VOLUME], [file2+BBFS_FILE_VOLUME]
         IFE [file+BBFS_FILE_START_SECTOR], [file2+BBFS_FILE_START_SECTOR]
             ; We've opened the same file twice. We can't truncate it because
             ; it's open. Just declare the copy done.
@@ -1445,16 +1498,37 @@ shell_builtin_del:
     
     ; We have now parsed our arguments
     
+    ; Set up filesystem globals
+    ; Drive2 is currently unused
+    SET [drive2], 0xFFFF
+    
+    ; Set up main drive device
+    SET PUSH, device
+    SET PUSH, [drive]
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; And main drive volume
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
     ; Open the file, not creating
-    ; shell_open(*header, *file, *filename, create)
-    SET PUSH, header ; Arg 1: header to populate
-    SET PUSH, file ; Arg 2: file to populate
-    SET PUSH, [Z] ; Arg 3: unpacked filename string
-    SET PUSH, 0 ; Arg 4: create flag
+    ; shell_open(*file, *filename, create)
+    SET PUSH, file ; Arg 1: file to populate
+    SET PUSH, [Z] ; Arg 2: unpacked filename string
+    SET PUSH, 0 ; Arg 3: create flag
     JSR shell_open
     SET A, POP ; Read error code
     SET B, POP ; Read second return value: index file is at in global directory
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
     
@@ -1474,6 +1548,22 @@ shell_builtin_del:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
+    ; Sync all applicable devices
+    SET PUSH, device
+    JSR bbfs_device_sync
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    IFE [drive2], 0xFFFF
+        SET PC, .no_drive2 
+    SET PUSH, device2
+    JSR bbfs_device_sync
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+.no_drive2:
     ; We were successful.
     ; Print success.
     SET PUSH, str_del_deleted ; Arg 1: string to print
@@ -1528,10 +1618,9 @@ shell_builtin_del:
     SET Z, POP
     SET PC, POP
     
-; shell_open(*header, *file, *filename, create)
-; Populate the given header and file by opening the given filename. Get drive
+; shell_open(*file, *filename, create)
+; Populate the given file by opening the given filename. Get drive
 ; from filename if possible.
-; [Z+3]: BBFS_HEADER to populate
 ; [Z+2]: BBFS_FILE to populate
 ; [Z+1]: File name buffer. May have a leading drive like A: or A:\. May be
 ; modified.
@@ -1539,6 +1628,9 @@ shell_builtin_del:
 ; Returns: Error code in [Z], index of file in directory in [Z+1]
 ; Side effect: leaves global directory open to the file's directory.
 ; TODO: make it be passed in by argument or something.
+;
+; PRECONDITION: volume and device must be open for the global [drive], and
+; either [drive2] must be 0xFFFF or volume2 and device2 must be open for it.
 shell_open:
     ; Set up frame pointer
     SET PUSH, Z
@@ -1549,6 +1641,7 @@ shell_open:
     SET PUSH, B ; Drive number to use/scratch for parsing it
     SET PUSH, C ; Actual file name start
     SET PUSH, X ; Index in directory
+    SET PUSH, Y ; Volume struct to use
     
     ; Find the actual filename start
     SET C, [Z+1]
@@ -1640,23 +1733,71 @@ shell_open:
     JSR bbfs_filename_pack
     ADD SP, 2
     
-    ; Read the header for the drive. TODO: make a table of header addresses by
-    ; drive so we can re-use the same header when opening multiple files or
-    ; something. Right now you can get multiple headers for a drive and lose
-    ; data if you save the wrong one.
-    SET PUSH, B ; Arg 1: drive number
-    SET PUSH, [Z+3] ; Arg 2: BBFS_HEADER
-    JSR bbfs_drive_load
-    ADD SP, 2
+    IFE B, [drive]
+        ; We can just use the main drive, which has its volume set up already.
+        ; No need for drive2/volume2
+        SET PC, .drive_main
+    IFE B, [drive2]
+        ; We already have this other drive mounted up as device2/volume2
+        SET PC, .drive_current
+        
+    ; Otherwise we need to set up drive2 and volume2
+    IFE [drive2], 0xFFFF
+        ; No need to sync; drive not initialized yet
+        SET PC, .load_new_drive
+        
+    ; Sync the device #2
+    SET PUSH, device2
+    JSR bbfs_device_sync
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+.load_new_drive:
+    SET [drive2], B
 
+    ; Set up device2 to point to this new drive
+    SET PUSH, device2
+    SET PUSH, [drive2]
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Load volume 2 on top of it
+    SET PUSH, volume2
+    SET PUSH, device2
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Continue on with the current secondary drive
+    SET PC, .drive_current
+    
+.drive_main:
+    ; Use the currently selected main drive and its associated filesystem
+    SET Y, volume
+    SET PC, .drive_ready
+    
+.drive_current:
+    ; Use the current alternate drive
+    SET Y, volume2
+    SET PC, .drive_ready
+    
+.drive_ready:
+    
     ; Open the root directory
     SET PUSH, directory ; Arg 1: BBFS_DIRECTORY
-    SET PUSH, [Z+3] ; Arg 2: BBFS_HEADER
-    SET PUSH, B ; Arg 3: drive number
-    SET PUSH, BBFS_ROOT_DIRECTORY ; Arg 4: directory start sector
+    SET PUSH, Y ; Arg 2: volume
+    ; Drop the first usable sector (where the root lives) on the stack
+    SET PUSH, Y
+    JSR bbfs_volume_get_first_usable_sector ;  Arg 3: directory start sector
     JSR bbfs_directory_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
@@ -1701,11 +1842,10 @@ shell_open:
     
     ; Otherwise, open it on the disk.
     SET PUSH, [Z+2] ; Arg 1: file
-    SET PUSH, [Z+3] ; Arg 2: header
-    SET PUSH, B ; Arg 3: drive
+    SET PUSH, Y ; Arg 2: volume
     JSR bbfs_file_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
     
@@ -1736,12 +1876,11 @@ shell_open:
 .file_found:
     ; We found the file's directory entry. Open the file.
     SET PUSH, [Z+2] ; Arg 1: file to open into
-    SET PUSH, [Z+3] ; Arg 2: FS header
-    SET PUSH, B ; Arg 3: drive to read from
-    SET PUSH, [entry+BBFS_DIRENTRY_SECTOR] ; Arg 4: sector to start at
+    SET PUSH, Y ; Arg 2: FS volume
+    SET PUSH, [entry+BBFS_DIRENTRY_SECTOR] ; Arg 3: sector to start at
     JSR bbfs_file_open
     SET A, POP
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A 
 
@@ -1774,6 +1913,7 @@ shell_open:
     SET [Z], A
 .return:
     SET [Z+1], X ; Return the index we found, if any
+    SET Y, POP
     SET X, POP
     SET C, POP
     SET B, POP
@@ -1893,15 +2033,36 @@ shell_builtin_load:
     
     ; We have now parsed our arguments
     
+    ; Set up filesystem globals
+    ; Drive2 is currently unused
+    SET [drive2], 0xFFFF
+    
+    ; Set up main drive device
+    SET PUSH, device
+    SET PUSH, [drive]
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; And main drive volume
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
     ; Open the file, not creating
-    ; shell_open(*header, *file, *filename, create)
-    SET PUSH, header ; Arg 1: header to populate
-    SET PUSH, file ; Arg 2: file to populate
-    SET PUSH, [Z] ; Arg 3: unpacked filename string
-    SET PUSH, 0 ; Arg 4: create flag
+    ; shell_open(*file, *filename, create)
+    SET PUSH, file ; Arg 1: file to populate
+    SET PUSH, [Z] ; Arg 2: unpacked filename string
+    SET PUSH, 0 ; Arg 3: create flag
     JSR shell_open
     SET A, POP ; Read error code
-    ADD SP, 3
+    ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
@@ -1940,7 +2101,10 @@ shell_builtin_load:
     SET PUSH, Z
     
     ; Load the file's drive into A, just to be like the bootloader
-    SET A, [file+BBFS_FILE_DRIVE]
+    SET A, [file+BBFS_FILE_VOLUME]
+    ADD A, BBFS_VOLUME_ARRAY ; This one is just containment
+    SET A, [A+BBFS_ARRAY_DEVICE]
+    SET A, [A+BBFS_DEVICE_DRIVE]
     
     ; Run the loaded code
     JSR 0
@@ -1971,6 +2135,13 @@ shell_builtin_load:
 .error_A:
     ; We did not successfuly load the file
     SET [Z], 0
+    
+    SET PUSH, str_load_fail ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
     SET PC, .return
 .return:
     SET B, POP
@@ -1978,7 +2149,9 @@ shell_builtin_load:
     SET Z, POP
     SET PC, POP
     
-    
+halt:
+    ; We can jump here for debugging
+    SET PC, halt
 
 ; We depend on bbfs
 #include <bbfs.asm>
@@ -2028,6 +2201,8 @@ str_del_deleted:
     ASCIIZ "Deleted "
 str_load_usage:
     ASCIIZ "Usage: LOAD <FILE>"
+str_load_fail:
+    ASCIIZ "Failed"
 str_img_extension: ; IMG binaries load at 0
     ".IMG"
 str_com_extension: ; COM binaries will be a bit smarter probably.
@@ -2092,6 +2267,11 @@ bootloader_code:
 ; Current drive number
 drive:
     RESERVE 1
+; BBFS structs for the current drive
+device:
+    RESERVE BBFS_DEVICE_SIZEOF
+volume:
+    RESERVE BBFS_VOLUME_SIZEOF
 ; File for loading things
 file:
     RESERVE BBFS_FILE_SIZEOF
@@ -2101,9 +2281,6 @@ directory:
 ; Entry struct for accessing directories
 entry:
     RESERVE BBFS_DIRENTRY_SIZEOF
-; Header for the filesystem
-header:
-    RESERVE BBFS_HEADER_SIZEOF
 ; String buffer for commands
 command_buffer:
     RESERVE SHELL_COMMAND_LINE_LENGTH
@@ -2113,9 +2290,16 @@ packed_filename:
 ; And an unpacked finename
 filename:
     RESERVE BBFS_FILENAME_BUFSIZE
-; We sometimes need two files
-header2:
-    RESERVE BBFS_HEADER_SIZEOF
+; We sometimes need two filesystems in play. But we need to make sure they are
+; never on the same drive.
+drive2:
+    ; This gets set to 0xFFFF when not in use.
+    RESERVE 1
+device2:
+    RESERVE BBFS_DEVICE_SIZEOF
+volume2:
+    RESERVE BBFS_VOLUME_SIZEOF
+; And two files (which may be on either drive)
 file2:
     RESERVE BBFS_FILE_SIZEOF
 ; We need a place to put the code that moves the main code into high memory We

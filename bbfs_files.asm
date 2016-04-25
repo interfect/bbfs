@@ -580,19 +580,9 @@ bbfs_file_read:
     SET [B+BBFS_FILE_SECTOR], A
     SET [B+BBFS_FILE_OFFSET], 0
     
-    ; Load it from disk
-    SET PUSH, C ; Arg 1: device
-    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
-    JSR bbfs_device_get
-    SET I, POP
-    ADD SP, 1
-    
-    IFE I, 0x0000
-        ; Couldn't get the sector
-        SET PC, .error_drive
-    
     ; Load the number of words available to read in the sector from its FAT
-    ; entry.
+    ; entry. We need to do this first because otherwise it would touch the
+    ; device and invalidate the sector pointer.
     SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
     SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
     JSR bbfs_volume_fat_get
@@ -609,6 +599,17 @@ bbfs_file_read:
     AND A, 0x7FFF ; Take everything but the high bit
     ; And say that that's the current file length within this sector.
     SET [B+BBFS_FILE_MAX_OFFSET], A 
+    
+    ; Load the sector from disk
+    SET PUSH, C ; Arg 1: device
+    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector we want
+    JSR bbfs_device_get
+    SET I, POP
+    ADD SP, 1
+    
+    IFE I, 0x0000
+        ; Couldn't get the sector
+        SET PC, .error_drive
     
     ; Keep reading
     SET PC, .read_until_depleted

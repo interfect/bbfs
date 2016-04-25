@@ -106,6 +106,27 @@ bbfs_volume_open:
     SET A, POP
     SET Z, POP
     SET PC, POP
+    
+; bbfs_volume_get_first_usable_sector(*volume)
+;   Return the first usable (non-FAT) sector in the given volume.
+; [Z]: BBFS_VOLUME to operate on
+; Returns: sector in [Z]
+bbfs_volume_get_first_usable_sector:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Pointer to the volume
+    
+    SET A, [Z]
+
+    ; Grab the value
+    SET [Z], [A+BBFS_VOLUME_FIRST_USABLE_SECTOR]
+    
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; bbfs_volume_format(volume*)
 ;   Format the given volume with an empty BBFS filesystem. Returns an error

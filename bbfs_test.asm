@@ -388,7 +388,94 @@ write_loop:
     SET A, POP
     IFN A, BBFS_ERR_NONE
         SET PC, fail
+        
+        
+    ; Now read it back
+    SET PUSH, str_reopen
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+        
+    SET PUSH, file
+    JSR bbfs_file_reopen
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, fail
+        
+    ; Read until the end
+    SET PUSH, str_read_all
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
     
+    ; Display the number
+    SET B, [file+BBFS_FILE_SECTOR]
+    ADD B, 48
+    SET PUSH, 0
+    SET PUSH, B
+    SET B, SP
+    SET PUSH, B
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 4
+    
+    ; I will be the position in the program we are checking
+    SET I, 0
+    
+read_loop:
+    SET PUSH, file
+    SET PUSH, 0xA000
+    SET PUSH, 256
+    JSR bbfs_file_read
+    SET C, POP
+    ADD SP, 2
+    
+    ; Display the number
+    SET B, [file+BBFS_FILE_SECTOR]
+    IFG B, 9
+        ; Too big to be a number, make it hex
+        ADD B, 7
+    ADD B, 48 ; Value of '0'
+    SET PUSH, 0
+    SET PUSH, B
+    SET B, SP
+    SET PUSH, B
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 4
+    
+    ; See if we got the right stuff
+    SET J, 0xA000
+compare_loop:
+    IFN [I], [J]
+        SET PC, mismatch
+    ADD I, 1
+    ADD J, 1
+    IFN J, 0xA100
+        IFL I, program_end
+            ; Keep checking until we run out of file or program
+            SET PC, compare_loop
+    SET PC, compared
+mismatch:
+    SET B, [I]
+    SET C [J]
+    SET X, [file+BBFS_FILE_SECTOR]
+    SET PC, fail
+
+compared:
+    
+    ; Now see if we got an EOF or not
+    IFE C, BBFS_ERR_NONE
+        SET PC, read_loop
+    
+    IFN C, BBFS_ERR_EOF
+        ; If we don't have a clean EOF, die.
+        SET PC, fail
+        
     ; Open the directory
     ; Announce it
     SET PUSH, str_opening_directory
@@ -598,6 +685,8 @@ str_truncate:
     ASCIIZ "Truncating..."
 str_file_contents2: 
     ASCIIZ "NEWDATANEWDATA"
+str_read_all:
+    ASCIIZ "Reading whole file..."
 str_delete_file:
     ASCIIZ "Deleting..."
 str_mkdir:
