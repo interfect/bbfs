@@ -86,6 +86,9 @@ bbfs_volume_open:
     IFN X, BBFS_ERR_NONE
         ; We couldn't talk to the drive
         SET PC, .error_x
+    
+    ; If nothing else is wrong, we're successful.
+    SET [Z], BBFS_ERR_NONE
         
     IFN C, BBFS_VERSION
         ; This doesn't look like a formatted disk

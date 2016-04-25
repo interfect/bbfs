@@ -48,11 +48,15 @@ start:
     SET A, POP
     ADD SP, 1
     
+    SET Z, A
+    SET X, volume
+    SET Y, device
+    
     ; It may be unformatted but otherwise should be OK.
     IFN A, BBFS_ERR_UNFORMATTED
         IFN A, BBFS_ERR_NONE
             SET PC, fail
-    
+            
     ; Say we're formatting
     SET PUSH, str_formatting
     SET PUSH, 1 ; With newline
@@ -327,7 +331,7 @@ write_loop:
     SET PUSH, volume
     JSR bbfs_file_create
     SET A, POP
-    ADD SP, 2
+    ADD SP, 1
     
     IFN A, BBFS_ERR_NONE
         SET PC, fail
@@ -359,7 +363,6 @@ write_loop:
     ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, fail
-        
         
     ; Copy the running program into the file with a giant write call
     ; Announce it
@@ -525,6 +528,10 @@ no_bootloader:
     ADD SP, 1
     IFN A, BBFS_ERR_NONE
         SET PC, fail
+        
+    ; Make sure we didn't make the stack go wonky
+    IFN SP, 0
+        SET PC, fail_stack
 
     ; Say we're done
     SET PUSH, str_done
@@ -536,8 +543,18 @@ no_bootloader:
 halt:
     SET PC, halt
     
+fail_stack:
+    ; Say we broke the stack
+    SET PUSH, str_fail_stack
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, halt
+    
 fail:
-    ; Say we failed something
+    ; Say we failed generically
     SET PUSH, str_fail
     SET PUSH, 1 ; With newline
     SET A, WRITE_STRING
@@ -609,6 +626,8 @@ str_done:
     ASCIIZ "Done!"
 str_fail:
     ASCIIZ "Failed!"
+str_fail_stack:
+    ASCIIZ "Stack error."
 
 ; Mark the end of the program data
 program_end:
