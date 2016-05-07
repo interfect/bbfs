@@ -489,7 +489,7 @@ bbfs_file_write:
 ; [Z+2]: BBFS_FILE to read from
 ; [Z+1]: Buffer to read into
 ; [Z]: Number of words to read
-; Returns: error code in [Z]
+; Returns: error code in [Z], words successfully read in [Z+1]
 bbfs_file_read:
     ; Set up frame pointer
     SET PUSH, Z
@@ -501,9 +501,13 @@ bbfs_file_read:
     SET PUSH, C ; Filesystem device struct address
     SET PUSH, I ; Pointer into file buffer
     SET PUSH, J ; Pointer into data
+    SET PUSH, X ; Words successfully read
     SET PUSH, Y ; Words per sector
     
     ; We're going to decrement [Z] as we read words until it's 0
+    
+    ; We also increment X
+    SET X, 0
     
     ; Load the file struct address
     SET B, [Z+2]
@@ -554,6 +558,8 @@ bbfs_file_read:
     SUB [Z], 1
     ; And one word of this sector
     ADD [B+BBFS_FILE_OFFSET], 1
+    ; Record that we successfully read a word
+    ADD X, 1
     
     ; Loop around
     SET PC, .read_until_depleted
@@ -634,7 +640,9 @@ bbfs_file_read:
     SET [Z], BBFS_ERR_DRIVE
 
 .return:
+    SET [Z+1], X ; Return words successfully read (before any error)
     SET Y, POP
+    SET X, POP
     SET J, POP
     SET I, POP
     SET C, POP

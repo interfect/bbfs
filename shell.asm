@@ -1234,10 +1234,10 @@ shell_builtin_copy:
     ADD Z, 2
     
     SET PUSH, A ; BBOS calls/scratch
-    SET PUSH, B ; Address of the 1-word stack buffer
+    SET PUSH, B ; Words successfully read
     SET PUSH, C ; Second file name
-    SUB SP, 1 ; Allocate a 1-word buffer on the stack
-    SET B, SP ; Point to it
+    
+    
 
     ; Parse the command line
     ; Split out the first filename
@@ -1357,29 +1357,30 @@ shell_builtin_copy:
 .copy_loop:
     ; Read from file 1
     SET PUSH, file ; Arg 1: file
-    SET PUSH, B ; Arg 2: buffer
-    SET PUSH, 1 ; Arg 3: length
+    SET PUSH, copy_buffer ; Arg 2: buffer
+    SET PUSH, COPY_BUFFER_SIZE ; Arg 3: length
     JSR bbfs_file_read
-    SET A, POP
-    ADD SP, 2
-    IFE A, BBFS_ERR_EOF
-        ; We hit EOF so we're done copying
-        SET PC, .copy_done
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    SET A, POP ; Grab error code
+    SET B, POP ; And words read
+    ADD SP, 1
+    IFN A, BBFS_ERR_EOF
+        IFN A, BBFS_ERR_NONE
+            ; Wasn't an EOF and wasn't success
+            SET PC, .error_A
         
     ; Write to file 2
     SET PUSH, file2 ; Arg 1: file
-    SET PUSH, B ; Arg 2: buffer
-    SET PUSH, 1 ; Arg 3: length
+    SET PUSH, copy_buffer ; Arg 2: buffer
+    SET PUSH, B ; Arg 3: length
     JSR bbfs_file_write
     SET A, POP
     ADD SP, 2
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
-
-    ; Loop around and copy another word
-    SET PC, .copy_loop
+        
+    IFE B, COPY_BUFFER_SIZE    
+        ; We filled the read buffer. Loop around and copy more data.
+        SET PC, .copy_loop
 
 .copy_done:
     ; We read and wrote all the words.
@@ -1453,7 +1454,6 @@ shell_builtin_copy:
     ADD SP, 2
     
 .return:
-    ADD SP, 1 ; Deallocate 1-word buffer
     SET C, POP
     SET B, POP
     SET A, POP
@@ -2308,4 +2308,8 @@ file2:
 ; up with the real addresses.
 format_copyloader:
     RESERVE 32
+; We also want a buffer for copy operations
+define COPY_BUFFER_SIZE BBFS_MAX_SECTOR_SIZE
+copy_buffer:
+    RESERVE COPY_BUFFER_SIZE
     
