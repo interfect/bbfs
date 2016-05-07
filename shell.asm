@@ -202,7 +202,8 @@ shell_readline:
     SET PUSH, A ; BBOS calls
     SET PUSH, B ; Cursor position in the buffer
     SET PUSH, C ; Character we're reading
-    SET PUSH, X ; Cursor manipulation scratch
+    SET PUSH, X ; Cursor horizontal scratch
+    SET PUSH, Y ; Cursor vertical scratch
     
     ; Set up a cursor position in the buffer
     SET B, [Z+1]
@@ -234,8 +235,6 @@ shell_readline:
     IFE C, KEY_ARROW_LEFT
         ; If it's a left arrow, move the cursor left
         SET PC, .key_arrow_left
-    
-    ; TODO: if it's an arrow key, move the cursor.
     
     IFL C, ASCII_MIN
         ; Other non-printable. Try again
@@ -297,9 +296,10 @@ shell_readline:
     ; Read another key
     SET PC, .key_loop
 .key_arrow_left:
-    SET PC, .key_arrow_left
+    ; TODO: don't ignore
     SET PC, .key_loop
 .key_arrow_right:
+    ; TODO: don't ignore
     SET PC, .key_loop
 .key_printable:
     ; If it's a printable character, write it to the buffer and the screen.
@@ -324,29 +324,16 @@ shell_readline:
     SUB SP, 2
     SET A, GET_SCREEN_SIZE
     INT BBOS_IRQ_MAGIC
-    ADD SP, 1
+    SET Y, POP ; Save the height
     SET X, POP ; Save the width. 
     
     ; Now get the cursor position.
     SUB SP, 2
     SET A, GET_CURSOR_POS
     INT BBOS_IRQ_MAGIC
-    ADD SP, 1
-    SUB X, POP ; Subtract the cursor position.
+    SUB Y, POP ; Subtract the cursor row
+    SUB X, POP ; Subtract the cursor column.
     
-    IFN X, 0
-        ; We have some characters left on this line, so no scrolling is
-        ; required.
-        SET PC, .no_scroll_needed
-        
-    ; We're out of room on this line. Print a newline.
-    SET PUSH, str_newline
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-        
-.no_scroll_needed:
     ; Write the typed character to the screen
     SET PUSH, C ; Arg 1: character to write
     SET PUSH, 1 ; Arg 2: move cursor or not
@@ -354,9 +341,31 @@ shell_readline:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
+    IFN X, 1
+        ; We weren't about to fill in the last column, so no scrolling is needed
+        SET PC, .no_scroll_needed
+    
+    IFN Y, 1
+        ; We were not on the last row of the terminal, which is really the only
+        ; place we need the newline.
+        SET PC, .no_scroll_needed
+        
+    ; Else we're out of room on this line. Print a newline.
+    SET PUSH, str_newline
+    SET PUSH, 1 ; With newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; We need to update our home position for when we re-print on
+    ; backspace.
+    SUB [SP], 1
+        
+.no_scroll_needed:
     SET PC, .key_loop
 .return:
     ADD SP, 2 ; Delete the cursor start X and Y
+    SET Y, POP
     SET X, POP
     SET C, POP
     SET B, POP
