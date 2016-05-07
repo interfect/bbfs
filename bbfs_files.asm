@@ -547,7 +547,7 @@ bbfs_file_read:
     IFE [B+BBFS_FILE_OFFSET], Y
         ; We've used up our buffered sector
         SET PC, .go_to_next_sector
-    IFG [B+BBFS_FILE_OFFSET], [B+BBFS_FILE_MAX_OFFSET]
+    IFE [B+BBFS_FILE_OFFSET], [B+BBFS_FILE_MAX_OFFSET]
         ; Our max offset isn't a full sector and we've depleted it.
         ; We know this has to be the last sector, so just say EOF.
         SET PC, .error_end_of_file
