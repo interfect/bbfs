@@ -13,6 +13,7 @@
 ; Initialize a BBFS_DEVICE to cache sectors from the given drive.
 ; [Z+1]: BBFS_DEVICE to operate on
 ; [Z]: BBOS drive number to point the device at
+; Returns: nothing (TODO: maybe have an error code?)
 bbfs_device_open:
     ; Set up frame pointer
     SET PUSH, Z

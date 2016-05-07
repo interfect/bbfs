@@ -790,10 +790,7 @@ shell_builtin_format:
     SET PUSH, device
     SET PUSH, B
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_unknown
+    ADD SP, 2 ; Can't fail
         
     ; And open the main volume on that device
     SET PUSH, volume
@@ -1065,10 +1062,7 @@ shell_builtin_dir:
     SET PUSH, device
     SET PUSH, B
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_unknown
+    ADD SP, 2 ; Can't fail
         
     ; And main drive volume
     SET PUSH, volume
@@ -1301,10 +1295,7 @@ shell_builtin_copy:
     SET PUSH, device
     SET PUSH, [drive]
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    ADD SP, 2 ; Can't fail
         
     ; And main drive volume
     SET PUSH, volume
@@ -1506,10 +1497,7 @@ shell_builtin_del:
     SET PUSH, device
     SET PUSH, [drive]
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    ADD SP, 2 ; Can't fail
         
     ; And main drive volume
     SET PUSH, volume
@@ -1760,10 +1748,7 @@ shell_open:
     SET PUSH, device2
     SET PUSH, [drive2]
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    ADD SP, 2 ; Can't fail
         
     ; Load volume 2 on top of it
     SET PUSH, volume2
@@ -2041,10 +2026,7 @@ shell_builtin_load:
     SET PUSH, device
     SET PUSH, [drive]
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    ADD SP, 2 ; Can't fail
         
     ; And main drive volume
     SET PUSH, volume
