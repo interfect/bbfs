@@ -16,6 +16,9 @@ define BBOS_BOOTLOADER_MAGIC_POSITION 511
 .org 0
 
 start:
+    ; Save the drive number
+    SET [drive_number], A
+    
     ; Say we're opening a device
     SET PUSH, str_device_open
     SET PUSH, 1 ; With newline
@@ -25,14 +28,12 @@ start:
     
     ; Open the device
     SET PUSH, device ; Arg 1: device to construct
-    SET PUSH, 0 ; Arg 2: drive to work on (0)
+    SET PUSH, [drive_number] ; Arg 2: drive to work on
     JSR bbfs_device_open
     SET A, POP
     ADD SP, 1
     
-    ; We should have no error
-    IFN A, BBFS_ERR_NONE
-        SET PC, fail
+    ; TODO: no error code is to be returned. We should maybe add one.
         
     ; Open up the disk as a volume
     SET PUSH, str_volume_open
@@ -83,9 +84,11 @@ start:
     JSR bbfs_volume_find_free_sector
     SET A, POP
     
-    ; It should always be sector 4 (after the 4 reserved for boot and FS)
+    ; On floppies it should always be sector 4 (after the 4 reserved for boot and FS)
+    ; On HDDs it can be C
     IFN A, 4
-        SET PC, fail
+        IFN A, 0x000C
+            SET PC, fail
         
     ; Say we're making a file
     SET PUSH, str_creating_file
@@ -117,9 +120,10 @@ start:
     SET A, POP
     
     ; It should always be sector 5 (after the 4 reserved for boot and FS and the
-    ; 1 just taken)
+    ; 1 just taken) on floppies, and 0xD on HDDs.
     IFN A, 5
-        SET PC, fail
+        IFN A, 0x000D
+            SET PC, fail
        
     ; Say we're writing to the file
     SET PUSH, str_write_file
@@ -244,10 +248,12 @@ write_loop:
     ADD A, BBFS_FILE_OFFSET
     IFN [A], 257
         SET PC, fail
+    ; Next sector should be 5 on a floppy and 0xD on an HDD
     SET A, file
     ADD A, BBFS_FILE_SECTOR
     IFN [A], 5
-        SET PC, fail
+        IFN [A], 0x000D
+            SET PC, fail
         
     ; Say we're going to truncate
     SET PUSH, str_truncate
@@ -561,10 +567,10 @@ dir_entry_loop_done:
     ; First set its magic word
     SET [bootloader_code+BBOS_BOOTLOADER_MAGIC_POSITION], BBOS_BOOTLOADER_MAGIC
     
-    ; Then make a raw BBOS call to stick it as the first sector of drive 0
+    ; Then make a raw BBOS call to stick it as the first sector of our drive
     SET PUSH, 0 ; Arg 1: sector
     SET PUSH, bootloader_code ; Arg 2: pointer
-    SET PUSH, 0 ; Arg 3: drive number
+    SET PUSH, [drive_number] ; Arg 3: drive number
     SET A, WRITE_DRIVE_SECTOR
     INT BBOS_IRQ_MAGIC
     ADD SP, 3
@@ -722,6 +728,8 @@ str_fail_stack:
 program_end:
 
 ; Reserve space for the filesystem stuff
+drive_number:
+.reserve 1
 device:
 .reserve BBFS_DEVICE_SIZEOF
 volume:

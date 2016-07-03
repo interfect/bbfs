@@ -2151,7 +2151,7 @@ halt:
 str_ready:
     .asciiz "DC-DOS 1.2 Ready"
 str_prompt:
-    .asciiz ":\\> "
+    .asciiz ":\> "
 str_ver_version1:
     .asciiz "DC-DOS Command Interpreter 1.2"
 str_ver_version2:
