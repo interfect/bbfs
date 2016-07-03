@@ -48,6 +48,11 @@ start:
     IFN A, 1440
         IFN A, 5120
             SET PC, fail
+            
+    IFE A, 1440
+        SET [is_floppy], 1
+    IFE A, 5120
+        SET [is_floppy], 0
     
     SET PUSH, str_sector_size
     SET PUSH, 1 ; With newline
@@ -239,6 +244,10 @@ start:
     IFN A, BBFS_ERR_UNFORMATTED
         SET PC, fail
         
+    
+    IFN [is_floppy], 1
+        SET PC, not_floppy
+        
     ; We should have gotten the right parameters for a floppy
     ; Should be compatible with old implementation
     IFN [volume+BBFS_VOLUME_FREEMASK_START], 6
@@ -247,6 +256,8 @@ start:
         SET PC, fail
     IFN [volume+BBFS_VOLUME_FIRST_USABLE_SECTOR], 4
         SET PC, fail
+        
+not_floppy:
         
     ; Now format the disk
     SET PUSH, str_volume_format
@@ -274,8 +285,9 @@ start:
     JSR bbfs_volume_find_free_sector
     SET A, POP
     
-    IFN A, 4 ; First free sector on a floppy should be 4
-        SET PC, fail
+    IFE [is_floppy], 1
+        IFN A, 4 ; First free sector on a floppy should be 4
+            SET PC, fail
         
     ; Now set something in the FAT
     SET PUSH, str_volume_fat_set
@@ -546,6 +558,10 @@ file_contents_end:
 
 ; Mark the end of the program data
 program_end:
+
+; Record if we are on a floppy or HDD
+is_floppy:
+.reserve 1
 
 ; Reserve space for the filesystem header
 device:
