@@ -31,9 +31,7 @@ start:
     SET A, POP
     ADD SP, 1
     
-    ; We should have no error
-    IFN A, BBFS_ERR_NONE
-        SET PC, fail
+    ; TODO: no error return code provided
         
     SET PUSH, str_sector_count
     SET PUSH, 1 ; With newline
@@ -46,9 +44,10 @@ start:
     JSR bbfs_device_sector_count
     SET A, POP
     
-    ; Should be 1440 sectors on a floppy
+    ; Should be 1440 sectors on a floppy, and 5120 on an HDD
     IFN A, 1440
-        SET PC, fail
+        IFN A, 5120
+            SET PC, fail
     
     SET PUSH, str_sector_size
     SET PUSH, 1 ; With newline
@@ -61,7 +60,7 @@ start:
     JSR bbfs_device_sector_size
     SET A, POP
     
-    ; Should be 512 words on a floppy
+    ; Should be 512 words on a floppy or an HDD
     IFN A, 512
         SET PC, fail
         
