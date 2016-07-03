@@ -124,7 +124,7 @@ bbfs_directory_open:
         SET PC, .error_notdir
         
     ; Fill in the number of remaining entries
-    SET [A+BBFS_DIRECTORY_CHILDREN_LEFT] [C+BBFS_DIRHEADER_CHILD_COUNT]
+    SET [A+BBFS_DIRECTORY_CHILDREN_LEFT], [C+BBFS_DIRHEADER_CHILD_COUNT]
     
     ; We succeeded
     SET [Z], BBFS_ERR_NONE

@@ -462,7 +462,7 @@ compare_loop:
     SET PC, compared
 mismatch:
     SET B, [I]
-    SET C [J]
+    SET C, [J]
     SET X, [file+BBFS_FILE_SECTOR]
     SET PC, fail
 
@@ -654,88 +654,88 @@ fail:
 
 ; Strings
 str_device_open:
-    ASCIIZ "Opening device..."
+    .asciiz "Opening device..."
 str_volume_open:
-    ASCIIZ "Opening volume..."
+    .asciiz "Opening volume..."
 str_formatting:
-    ASCIIZ "Formatting..."
+    .asciiz "Formatting..."
 str_loading:
-    ASCIIZ "Loading..."
+    .asciiz "Loading..."
 str_saving:
-    ASCIIZ "Saving..."
+    .asciiz "Saving..."
 str_find_free:
-    ASCIIZ "Find free sector..."
+    .asciiz "Find free sector..."
 str_creating_file:
-    ASCIIZ "Creating file..."
+    .asciiz "Creating file..."
 str_write_file:
-    ASCIIZ "Writing to file..."
+    .asciiz "Writing to file..."
 str_file_contents: 
-    ASCIIZ "This goes into the file!"
+    .asciiz "This goes into the file!"
 str_flush:
-    ASCIIZ "Flushing to disk..."
+    .asciiz "Flushing to disk..."
 str_open:
-    ASCIIZ "Opening file..."
+    .asciiz "Opening file..."
 str_reopen:
-    ASCIIZ "Returning to start..."
+    .asciiz "Returning to start..."
 str_read:
-    ASCIIZ "Reading data..."
+    .asciiz "Reading data..."
 str_skip:
-    ASCIIZ "Seeking ahead..."
+    .asciiz "Seeking ahead..."
 str_truncate:
-    ASCIIZ "Truncating..."
+    .asciiz "Truncating..."
 str_file_contents2: 
-    ASCIIZ "NEWDATANEWDATA"
+    .asciiz "NEWDATANEWDATA"
 str_read_all:
-    ASCIIZ "Reading whole file..."
+    .asciiz "Reading whole file..."
 str_delete_file:
-    ASCIIZ "Deleting..."
+    .asciiz "Deleting..."
 str_mkdir:
-    ASCIIZ "Creating directory..."
+    .asciiz "Creating directory..."
 str_filename:
-    ASCIIZ "IMG.BIN"
+    .asciiz "IMG.BIN"
 str_linking_file:
-    ASCIIZ "Adding directory entry..."
+    .asciiz "Adding directory entry..."
 str_saving_memory:
-    ASCIIZ "Saving program image to disk..."
+    .asciiz "Saving program image to disk..."
 str_opening_directory:
-    ASCIIZ "Opening directory..."
+    .asciiz "Opening directory..."
 str_listing_directory:
-    ASCIIZ "Listing directory..."
+    .asciiz "Listing directory..."
 str_entry:
-    ASCIIZ "Entry: "
+    .asciiz "Entry: "
 str_newline:
     DAT 0
 str_bootloader:
-    ASCIIZ "Installing bootloader..."
+    .asciiz "Installing bootloader..."
 str_filename2:
-    ASCIIZ "BOOT.IMG"
+    .asciiz "BOOT.IMG"
 str_unlinking_file:
-    ASCIIZ "Removing directory entry..."
+    .asciiz "Removing directory entry..."
 str_done:
-    ASCIIZ "Done!"
+    .asciiz "Done!"
 str_fail:
-    ASCIIZ "Failed!"
+    .asciiz "Failed!"
 str_fail_stack:
-    ASCIIZ "Stack error."
+    .asciiz "Stack error."
 
 ; Mark the end of the program data
 program_end:
 
 ; Reserve space for the filesystem stuff
 device:
-RESERVE BBFS_DEVICE_SIZEOF
+.reserve BBFS_DEVICE_SIZEOF
 volume:
-RESERVE BBFS_VOLUME_SIZEOF
+.reserve BBFS_VOLUME_SIZEOF
 file:
-RESERVE BBFS_FILE_SIZEOF
+.reserve BBFS_FILE_SIZEOF
 buffer:
-RESERVE BUFFER_SIZE
+.reserve BUFFER_SIZE
 directory:
-RESERVE BBFS_DIRECTORY_SIZEOF
+.reserve BBFS_DIRECTORY_SIZEOF
 entry:
-RESERVE BBFS_DIRENTRY_SIZEOF
+.reserve BBFS_DIRENTRY_SIZEOF
 filename:
-RESERVE BBFS_FILENAME_BUFSIZE
+.reserve BBFS_FILENAME_BUFSIZE
 
 bootloader_code:
 ; Include the BBFS bootloader assembled code. On the final disk the bootloader

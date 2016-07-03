@@ -495,54 +495,54 @@ fail:
 
 ; Strings
 str_device_open:
-    ASCIIZ "Opening device..."
+    .asciiz "Opening device..."
 str_sector_count:
-    ASCIIZ "Checking sector count..."
+    .asciiz "Checking sector count..."
 str_sector_size:
-    ASCIIZ "Checking sector size..."
+    .asciiz "Checking sector size..."
 str_device_get:
-    ASCIIZ "Load sector..."
+    .asciiz "Load sector..."
 str_device_sync:
-    ASCIIZ "Syncing to disk..."
+    .asciiz "Syncing to disk..."
 str_array_open:
-    ASCIIZ "Making disk-backed array..."
+    .asciiz "Making disk-backed array..."
 str_array_set:
-    ASCIIZ "Setting array values..."
+    .asciiz "Setting array values..."
 str_array_get:
-    ASCIIZ "Getting array values..."
+    .asciiz "Getting array values..."
 str_volume_open:
-    ASCIIZ "Opening volume..."
+    .asciiz "Opening volume..."
 str_volume_format:
-    ASCIIZ "Formatting volume..."
+    .asciiz "Formatting volume..."
 str_volume_find_free:
-    ASCIIZ "Find free sector..."
+    .asciiz "Find free sector..."
 str_volume_fat_set:
-    ASCIIZ "Setting FAT entry..."
+    .asciiz "Setting FAT entry..."
 str_volume_fat_get:
-    ASCIIZ "Getting FAT entry..."
+    .asciiz "Getting FAT entry..."
 str_volume_device:
-    ASCIIZ "Getting volume device..."
+    .asciiz "Getting volume device..."
 str_file_create:
-    ASCIIZ "Creating file..."
+    .asciiz "Creating file..."
 str_file_write:
-    ASCIIZ "Writing to file..."
+    .asciiz "Writing to file..."
 str_file_flush:
-    ASCIIZ "Flushing..."
+    .asciiz "Flushing..."
 str_file_reopen:
-    ASCIIZ "Re-opening file..."
+    .asciiz "Re-opening file..."
 str_file_seek:
-    ASCIIZ "Seeking..."
+    .asciiz "Seeking..."
 str_file_read:
-    ASCIIZ "Reading..."
+    .asciiz "Reading..."
 str_file_delete:
-    ASCIIZ "Deleting file..."
+    .asciiz "Deleting file..."
 str_done:
-    ASCIIZ "Done!"
+    .asciiz "Done!"
 str_fail:
-    ASCIIZ "Failed!"
+    .asciiz "Failed!"
 
 str_file_contents:
-    ASCIIZ "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure. We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live. It is altogether fitting and proper that we should do this."
+    .asciiz "Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure. We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live. It is altogether fitting and proper that we should do this."
 file_contents_end:
 
 ; Mark the end of the program data
@@ -550,15 +550,15 @@ program_end:
 
 ; Reserve space for the filesystem header
 device:
-RESERVE BBFS_DEVICE_SIZEOF
+.reserve BBFS_DEVICE_SIZEOF
 array:
-RESERVE BBFS_ARRAY_SIZEOF
+.reserve BBFS_ARRAY_SIZEOF
 volume:
-RESERVE BBFS_VOLUME_SIZEOF
+.reserve BBFS_VOLUME_SIZEOF
 file:
-RESERVE BBFS_FILE_SIZEOF
+.reserve BBFS_FILE_SIZEOF
 read_buffer:
-RESERVE 512
+.reserve 512
 
 bootloader_code:
 ; Include the BBFS bootloader assembled code. On the final disk the bootloader

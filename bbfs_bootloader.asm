@@ -485,7 +485,7 @@ bbfs_directory_open_bl:
         SET PC, .error_notdir
         
     ; Fill in the number of remaining entries
-    SET [A+BBFS_BL_DIRECTORY_CHILDREN_LEFT] [C+BBFS_BL_DIRHEADER_CHILD_COUNT]
+    SET [A+BBFS_BL_DIRECTORY_CHILDREN_LEFT], [C+BBFS_BL_DIRHEADER_CHILD_COUNT]
     
     ; We succeeded
     SET [Z], BBFS_BL_ERR_NONE
@@ -618,15 +618,15 @@ bbfs_filename_compare_bl:
     SET PC, POP
     
 str_not_found_bl:
-    ASCIIZ "BOOT.IMG not found"
+    .asciiz "BOOT.IMG not found"
 str_found_bl:
-    ASCIIZ "Loading BOOT.IMG"
+    .asciiz "Loading BOOT.IMG"
 str_intro_bl:
-    ASCIIZ "UBM Bootloader 2.0"
+    .asciiz "UBM Bootloader 2.0"
 str_copyright_bl:
-    ASCIIZ "(C) UBM"
+    .asciiz "(C) UBM"
 str_error_bl:
-    ASCIIZ "Error"
+    .asciiz "Error"
 packed_filename_bl:
     ; Packed version of the "BOOT.IMG" filename. 8 words is less than the unpack
     ; routine.

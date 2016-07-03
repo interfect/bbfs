@@ -2149,74 +2149,74 @@ halt:
 
 ; Strings
 str_ready:
-    ASCIIZ "DC-DOS 1.2 Ready"
+    .asciiz "DC-DOS 1.2 Ready"
 str_prompt:
-    ASCIIZ ":\\> "
+    .asciiz ":\\> "
 str_ver_version1:
-    ASCIIZ "DC-DOS Command Interpreter 1.2"
+    .asciiz "DC-DOS Command Interpreter 1.2"
 str_ver_version2:
-    ASCIIZ "Copyright (C) UBM Corporation"
+    .asciiz "Copyright (C) UBM Corporation"
 str_not_found:
-    ASCIIZ ": Bad command or file name"
+    .asciiz ": Bad command or file name"
 str_format_usage:
-    ASCIIZ "Usage: FORMAT <DRIVELETTER>"
+    .asciiz "Usage: FORMAT <DRIVELETTER>"
 str_no_drive:
-    ASCIIZ "No drive "
+    .asciiz "No drive "
 str_no_media:
-    ASCIIZ "No media in drive "
+    .asciiz "No media in drive "
 str_write_protected:
-    ASCIIZ "Write-protected disk in drive "
+    .asciiz "Write-protected disk in drive "
 str_error_unknown:
-    ASCIIZ "Unknown error"
+    .asciiz "Unknown error"
 str_colon:
-    ASCIIZ ":"
+    .asciiz ":"
 str_boot_filename:
-    ASCIIZ "BOOT.IMG"
+    .asciiz "BOOT.IMG"
 str_format_success:
-    ASCIIZ "Formatted drive "
+    .asciiz "Formatted drive "
 str_dir_directory:
-    ASCIIZ "Directory listing of "
+    .asciiz "Directory listing of "
 str_copy_copied:
-    ASCIIZ "Copied "
+    .asciiz "Copied "
 str_copy_to:
-    ASCIIZ " to "
+    .asciiz " to "
 str_copy_usage:
-    ASCIIZ "Usage: COPY <FILE1> <FILE2>"
+    .asciiz "Usage: COPY <FILE1> <FILE2>"
 str_error_not_found:
-    ASCIIZ "File not found"
+    .asciiz "File not found"
 str_error_drive:
-    ASCIIZ "Drive invalid"
+    .asciiz "Drive invalid"
 str_del_usage:
-    ASCIIZ "Usage: DEL <FILE>"
+    .asciiz "Usage: DEL <FILE>"
 str_del_deleted:
-    ASCIIZ "Deleted "
+    .asciiz "Deleted "
 str_load_usage:
-    ASCIIZ "Usage: LOAD <FILE>"
+    .asciiz "Usage: LOAD <FILE>"
 str_load_fail:
-    ASCIIZ "Failed"
+    .asciiz "Failed"
 str_img_extension: ; IMG binaries load at 0
-    ".IMG"
+    .asciiz ".IMG"
 str_com_extension: ; COM binaries will be a bit smarter probably.
-    ".COM"
+    .asciiz ".COM"
     
     
 str_newline:
-    ; TODO: ASCIIZ doesn't like empty strings in dasm
+    ; TODO: .asciiz doesn't like empty strings in dasm
     DAT 0
     
 ; Builtin names:
 str_builtin_ver:
-    ASCIIZ "VER"
+    .asciiz "VER"
 str_builtin_format:
-    ASCIIZ "FORMAT"
+    .asciiz "FORMAT"
 str_builtin_dir:
-    ASCIIZ "DIR"
+    .asciiz "DIR"
 str_builtin_copy:
-    ASCIIZ "COPY"
+    .asciiz "COPY"
 str_builtin_del:
-    ASCIIZ "DEL"
+    .asciiz "DEL"
 str_builtin_load:
-    ASCIIZ "LOAD"
+    .asciiz "LOAD"
 
 ; Builtins table
 ;
@@ -2257,50 +2257,50 @@ bootloader_code:
 ; Global vars
 ; Current drive number
 drive:
-    RESERVE 1
+    .reserve 1
 ; BBFS structs for the current drive
 device:
-    RESERVE BBFS_DEVICE_SIZEOF
+    .reserve BBFS_DEVICE_SIZEOF
 volume:
-    RESERVE BBFS_VOLUME_SIZEOF
+    .reserve BBFS_VOLUME_SIZEOF
 ; File for loading things
 file:
-    RESERVE BBFS_FILE_SIZEOF
+    .reserve BBFS_FILE_SIZEOF
 ; Directory for scanning through
 directory:
-    RESERVE BBFS_DIRECTORY_SIZEOF
+    .reserve BBFS_DIRECTORY_SIZEOF
 ; Entry struct for accessing directories
 entry:
-    RESERVE BBFS_DIRENTRY_SIZEOF
+    .reserve BBFS_DIRENTRY_SIZEOF
 ; String buffer for commands
 command_buffer:
-    RESERVE SHELL_COMMAND_LINE_LENGTH
+    .reserve SHELL_COMMAND_LINE_LENGTH
 ; Packed filename for looking through directories
 packed_filename:
-    RESERVE BBFS_FILENAME_PACKED
+    .reserve BBFS_FILENAME_PACKED
 ; And an unpacked finename
 filename:
-    RESERVE BBFS_FILENAME_BUFSIZE
+    .reserve BBFS_FILENAME_BUFSIZE
 ; We sometimes need two filesystems in play. But we need to make sure they are
 ; never on the same drive.
 drive2:
     ; This gets set to 0xFFFF when not in use.
-    RESERVE 1
+    .reserve 1
 device2:
-    RESERVE BBFS_DEVICE_SIZEOF
+    .reserve BBFS_DEVICE_SIZEOF
 volume2:
-    RESERVE BBFS_VOLUME_SIZEOF
+    .reserve BBFS_VOLUME_SIZEOF
 ; And two files (which may be on either drive)
 file2:
-    RESERVE BBFS_FILE_SIZEOF
+    .reserve BBFS_FILE_SIZEOF
 ; We need a place to put the code that moves the main code into high memory We
 ; save it so we can write it out if we need to format a disk. We can't just
 ; leave it at the front of our code because then we can't get the .orgs to match
 ; up with the real addresses.
 format_copyloader:
-    RESERVE 32
+    .reserve 32
 ; We also want a buffer for copy operations
 define COPY_BUFFER_SIZE BBFS_MAX_SECTOR_SIZE
 copy_buffer:
-    RESERVE COPY_BUFFER_SIZE
+    .reserve COPY_BUFFER_SIZE
     
