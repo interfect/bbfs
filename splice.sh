@@ -4,7 +4,7 @@
 
 set -e
 
-SOURCE_DSK="shell.dsk"
+SOURCE_DSK="formatted.dsk"
 SOURCE_BL="bootloader3.bin"
 TEMP_DSK="temp.dsk"
 DEST_DSK="spliced.dsk"
