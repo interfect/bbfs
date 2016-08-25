@@ -156,37 +156,37 @@ SET [STATIC_ROOT_BL], C
 ; Read root directory file to address 0
 
 SET PUSH, [STATIC_ROOT_BL]
-JSR read_to_address_0
+JSR read_to_address_0_bl
 ADD SP, 1
 
 ; Scan for boot.img
 ; Use A to index child in the directory
 SET A, 0
 
-scan_loop:
+scan_loop_bl:
 ; If we use up all the children, complain
 IFE A, [BBFS_DIRHEADER_CHILD_COUNT]
-    SET PC, not_found
+    SET PC, not_found_bl
 
 ; Compare filename of this entry and correct packed filename
 SET PUSH, A ; Arg 1: pointer to packed filename
 MUL [SP], BBFS_DIRENTRY_SIZEOF
 ADD [SP], BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_NAME ; Need to offset by name in entry and by header before entries
 SET PUSH, packed_filename_bl ; Arg 2: other packed filename
-JSR bbfs_filename_compare
+JSR bbfs_filename_compare_bl
 SET C, POP
 ADD SP, 1
 
 ; We have a match!
 IFE C, 1
-    SET PC, found
+    SET PC, found_bl
 
 
 ; Look at the next entry
 ADD A, 1
-SET PC, scan_loop
+SET PC, scan_loop_bl
 
-found:
+found_bl:
 ; If found, read it to address 0
 ; First calculate the memory location of the start sector for this file
 MUL A, BBFS_DIRENTRY_SIZEOF
@@ -196,7 +196,7 @@ SET [0xAAAA], 0xAAAA
 
 ; Read all from that sector into memory
 SET PUSH, [A] ; Arg 1: sector to start at
-JSR read_to_address_0
+JSR read_to_address_0_bl
 ADD SP, 1
 
 ; Actually execute the loaded code
@@ -204,7 +204,7 @@ ADD SP, 1
 SET A, B
 SET PC, 0
 
-not_found:
+not_found_bl:
 ; We didn't find the boot image
 SET PUSH, str_not_found_bl
 SET PUSH, 1 ; With newline
@@ -217,12 +217,12 @@ halt_bl:
     
 ;; FUNCTIONS
 
-; get_fat(sector)
+; get_fat_bl(sector)
 ; Get the FAT entry for the given sector. Drive is read from B, which remains
 ; untouched.
 ; [Z]: Sector to read
 ; Returns: FAT entry in [Z]
-get_fat:
+get_fat_bl:
     ; Set up frame pointer
     SET PUSH, Z
     SET Z, SP
@@ -257,12 +257,12 @@ get_fat:
     SET PC, POP
 
 
-; read_to_address_0(start_sector)
+; read_to_address_0_bl(start_sector)
 ; Read the whole file starting at the given sector into memory, starting at
 ; address 0. Drive is read from B, which remains untouched.
 ; [Z]: sector number to start at
 ; Returns: nothing, but clobbers Z by incrementing
-read_to_address_0:
+read_to_address_0_bl:
     ; Set up frame pointer
     SET PUSH, Z
     SET Z, SP
@@ -284,7 +284,7 @@ read_to_address_0:
     
     ; Check the FAT for this sector
     SET PUSH, [Z]
-    JSR get_fat
+    JSR get_fat_bl
     SET [Z], POP
     
     ; If the high bit is set, this was the last sector, so stop.
@@ -304,13 +304,13 @@ read_to_address_0:
     SET Z, POP
     SET PC, POP
     
-; bbfs_filename_compare(*packed1, *packed2)
+; bbfs_filename_compare_bl(*packed1, *packed2)
 ; Return 1 if the packed filenames match, 0 otherwise.
 ; Performs case-insensitive comparison
 ; [Z+1]: Filename 1
 ; [Z]: Filename 2
 ; Return: 1 for match or 0 for mismatch in [Z]
-bbfs_filename_compare:
+bbfs_filename_compare_bl:
     SET PUSH, Z
     SET Z, SP
     ADD Z, 2
