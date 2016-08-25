@@ -1,11 +1,41 @@
 ; Bootloader with just enough BBFS code to load a file.
 
+; We don't need to read the free bitmap or anything. All we need to do is follow
+; FAT entries for the directory and for the actual boot file.
+
 ; Keeps itself at a fixed address, so there's a limit to the amount of code it
 ; can load.
 
-define BOOTLOADER_BASE 0xd000
+; New and exciting bootloader plan:
+; Grab the sector size to a global
+; Have a simple FAT get function based on that
+; Just use BBOS to load whole sectors
+; Just load the whole root directory into RAM at address 0
+; Scan it for the right filename
+; Just load that into RAM at address 0
+; Run it
+
 
 #include "bbos.inc.asm"
+
+define BOOTLOADER_BASE 0xd000
+
+; We statically allocate a directory, a direntry, and a file, but don't include
+; them in our image. We can't use labels in the defines; they all act like 0.
+; Instead we just place it safely one sector after the fixed bootloader address.
+
+; We need the BBOS drive info (DRIVE_SECT_SIZE and DRIVE_SECT_COUNT are members)
+define STATIC_DRIVEPARAM_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE
+; We need a sector cache for reading the FAT
+define STATIC_FAT_CACHE_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE
+; A FAT start sector
+define STATIC_FAT_SECTOR_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1
+; And offset in that sector
+define STATIC_FAT_OFFSET_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1+1
+; And the sector at which the root directory starts
+define STATIC_ROOT_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1+1+1
+; TODO: why can't these base on eachother???
+
 
 ; Consele API that we need
 ; Write Char              0x1003  Char, MoveCursor        None            1.0
@@ -13,68 +43,17 @@ define BOOTLOADER_BASE 0xd000
 define WRITE_CHAR 0x1003
 define WRITE_STRING 0x1004
 
+; BBOS drive API
+; Get Drive Count         0x2000  OUT Drive Count         Drive Count     1.0
+; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
+; Get Drive Parameters    0x2002  *DriveParams, DriveNum  None            1.0
+; Read Drive Sector       0x2003  Sector, Ptr, DriveNum   Success         1.0
+; Write Drive Sector      0x2004  Sector, Ptr, DriveNum   Success         1.0
 define GET_DRIVE_COUNT 0x2000
 define CHECK_DRIVE_STATUS 0x2001
 define GET_DRIVE_PARAMETERS 0x2002
 define READ_DRIVE_SECTOR 0x2003
 define WRITE_DRIVE_SECTOR 0x2004
-
-; BBFS_BL_HEADER: struct for the 3-sector header including bitmap and FAT
-define BBFS_BL_HEADER_SIZEOF 1536
-define BBFS_BL_HEADER_VERSION 0
-define BBFS_BL_HEADER_FREEMASK 6
-define BBFS_BL_HEADER_FAT 96
-
-; BFFS_FILE: file handle structure
-define BBFS_BL_FILE_SIZEOF 518
-define BBFS_BL_FILE_DRIVE 0 ; BBOS Disk drive number that the file is on
-define BBFS_BL_FILE_FILESYSTEM_HEADER 1 ; Address of the BFFS_HEADER for the file
-define BBFS_BL_FILE_START_SECTOR 2 ; Sector that the file starts at
-define BBFS_BL_FILE_SECTOR 3 ; Sector currently in buffer
-define BBFS_BL_FILE_OFFSET 4 ; Offset in the sector at which to read/write next
-define BBFS_BL_FILE_MAX_OFFSET 5 ; Numkber of used words in the sector
-define BBFS_BL_FILE_BUFFER 6 ; 512-word buffer for file data for the current sector
-
-; BBFS_BL_DIRHEADER: directory header structure
-define BBFS_BL_DIRHEADER_SIZEOF 2
-define BBFS_BL_DIRHEADER_VERSION 0
-define BBFS_BL_DIRHEADER_CHILD_COUNT 1
-
-; BBFS_BL_DIRENTRY: directory entry structure
-define BBFS_BL_DIRENTRY_SIZEOF 10
-define BBFS_BL_DIRENTRY_TYPE 0
-define BBFS_BL_DIRENTRY_SECTOR 1
-define BBFS_BL_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
-
-; BBFS_BL_DIRECTORY: handle for an open directory (which contains a file handle)
-define BBFS_BL_DIRECTORY_SIZEOF 1+BBFS_BL_FILE_SIZEOF
-define BBFS_BL_DIRECTORY_CHILDREN_LEFT 0
-define BBFS_BL_DIRECTORY_FILE 1
-
-; Parameters
-
-define BBFS_BL_VERSION 0xBF56
-define BBFS_BL_SECTORS 1440
-define BBFS_BL_WORDS_PER_SECTOR 512
-define BBFS_BL_SECTOR_WORDS 90 ; Words for one sector per bit
-define BBFS_BL_FILENAME_BUFSIZE 17 ; Characters plus trailing null
-define BBFS_BL_FILENAME_PACKED 8 ; Packed 2 per word internally
-
-; Error codes
-define BBFS_BL_ERR_NONE                0x0000
-define BBFS_BL_ERR_DRIVE               0x0005
-define BBFS_BL_ERR_DISC_FULL           0x0007
-define BBFS_BL_ERR_EOF                 0x0008
-define BBFS_BL_ERR_UNKNOWN             0x0009
-define BBFS_BL_ERR_NOTDIR              0x1001
-
-; Directory constants
-define BBFS_BL_TYPE_DIRECTORY 0
-define BBFS_BL_TYPE_FILE 1
-
-; What sector is the root directory always in?
-define BBFS_BL_ROOT_DIRECTORY 4
-
 
 ; This code starts at 0 and is just smart enough to copy the rest to the bootloader base address.
 .org 0
@@ -118,432 +97,216 @@ SET A, WRITE_STRING
 INT BBOS_IRQ_MAGIC
 ADD SP, 2
 
-; Read the header
-SET PUSH, B ; Arg 1: drive number
-SET PUSH, STATIC_HEADER_BL ; Arg 2: BBFS_BL_HEADER
-JSR bbfs_drive_load_bl
+; Get drive info into globals
+; Make the BBOS call to get device info
+SET PUSH, STATIC_DRIVEPARAM_BL ; Arg 1: drive info to populate
+SET PUSH, B ; Arg 2: device number
+SET A, GET_DRIVE_PARAMETERS
+INT BBOS_IRQ_MAGIC
 ADD SP, 2
 
-; Open the directory
-SET PUSH, STATIC_DIRECTORY_BL ; Arg 1: BBFS_BL_DIRECTORY
-SET PUSH, STATIC_HEADER_BL ; Arg 2: BBFS_BL_HEADER
-SET PUSH, B ; Arg 3: drive number
-SET PUSH, BBFS_BL_ROOT_DIRECTORY ; Arg 4: directory start sector (4 for root dir)
-JSR bbfs_directory_open_bl
-ADD SP, 4
-
-dir_entry_loop_bl:
-    ; Load an entry
-    SET PUSH, STATIC_DIRECTORY_BL
-    SET PUSH, STATIC_DIRENTRY_BL
-    JSR bbfs_directory_next_bl
-    SET A, POP
-    ADD SP, 1
-    IFE A, BBFS_BL_ERR_EOF
-        ; We didn't find our file to boot
-        SET PC, file_not_found_bl
-        
-    ; Call the comparison routine
-    SET PUSH, STATIC_DIRENTRY_BL ; Arg 1: first packed filename
-    ADD [SP], BBFS_BL_DIRENTRY_NAME
-    SET PUSH, packed_filename_bl ; Arg 2: second packed filename
-    JSR bbfs_filename_compare_bl
-    SET A, POP
-    ADD SP, 1
+; Determine FAT start sector and start offset
+; First work out its word offset in Y
     
-    IFE A, 0
-        ; This wasn't a match. Loop until found.
-        SET PC, dir_entry_loop_bl
-        
-; If we get here, we just need to read until EOF.
+; It comes after the freemask, which starts here
+SET Y, BBFS_HEADER_FREEMASK
+    
+; Find where the FAT begins (AKA past-the-end of the freemask)
+; Get total sectors
+SET X, [STATIC_DRIVEPARAM_BL+DRIVE_SECT_COUNT]
+; Divide by 16 to a word
+SET C, X
+DIV C, 16
 
-; Say we found the file
-SET PUSH, str_found_bl
+; Add in all the full words
+ADD Y, C
+SET C, X
+MOD C, 16
+IFG C, 0
+    ; Count a partial last word
+    ADD Y, 1
+    
+; Say the FAT starts in the sector where this word lands
+SET [STATIC_FAT_SECTOR_BL], Y
+DIV [STATIC_FAT_SECTOR_BL], [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
+; But after the BBFS start sector
+ADD [STATIC_FAT_SECTOR_BL], BBFS_START_SECTOR
+
+; And say it starts at the offset that this word has
+SET [STATIC_FAT_OFFSET_BL], Y
+MOD [STATIC_FAT_OFFSET_BL], [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
+
+; We still have total sectors in X. We need a FAT entry for each sector
+ADD Y, X
+; Now Y is the past-the-end word of the FAT
+SET C, Y
+DIV C, [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE] ; How many sectors is that?
+    
+MOD Y, [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
+IFG Y, 0
+    ; Use a partial sector if needed
+    ADD C, 1
+    
+; Add in the boot record
+ADD C, BBFS_START_SECTOR
+
+; Save the sector after the FAT (where the root directory lives) in a global
+SET [STATIC_ROOT_BL], C
+
+; Read root directory file to address 0
+
+SET PUSH, [STATIC_ROOT_BL]
+JSR read_to_address_0_bl
+ADD SP, 1
+
+; Scan for boot.img
+; Use A to index child in the directory
+SET A, 0
+
+scan_loop_bl:
+; If we use up all the children, complain
+IFE A, [BBFS_DIRHEADER_CHILD_COUNT]
+    SET PC, not_found_bl
+
+; Compare filename of this entry and correct packed filename
+SET PUSH, A ; Arg 1: pointer to packed filename
+MUL [SP], BBFS_DIRENTRY_SIZEOF
+ADD [SP], BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_NAME ; Need to offset by name in entry and by header before entries
+SET PUSH, packed_filename_bl ; Arg 2: other packed filename
+JSR bbfs_filename_compare_bl
+SET C, POP
+ADD SP, 1
+
+; We have a match!
+IFE C, 1
+    SET PC, found_bl
+
+
+; Look at the next entry
+ADD A, 1
+SET PC, scan_loop_bl
+
+found_bl:
+; If found, read it to address 0
+; First calculate the memory location of the start sector for this file
+MUL A, BBFS_DIRENTRY_SIZEOF
+ADD A, BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_SECTOR
+
+SET [0xAAAA], 0xAAAA
+
+; Read all from that sector into memory
+SET PUSH, [A] ; Arg 1: sector to start at
+JSR read_to_address_0_bl
+ADD SP, 1
+
+; Actually execute the loaded code
+; Make sure to pass drive in A
+SET A, B
+SET PC, 0
+
+not_found_bl:
+; We didn't find the boot image
+SET PUSH, str_not_found_bl
 SET PUSH, 1 ; With newline
 SET A, WRITE_STRING
 INT BBOS_IRQ_MAGIC
 ADD SP, 2
 
-; Save the sector that the file starts at in C
-SET C, [STATIC_DIRENTRY_BL+BBFS_BL_DIRENTRY_SECTOR]
-
-; Open the file
-SET PUSH, STATIC_FILE_BL ; Arg 1: file to open into
-SET PUSH, STATIC_HEADER_BL ; Arg 2: FS header
-SET PUSH, B ; Arg 3: drive to read from
-SET PUSH, C ; Arg 4: sector to start at
-JSR bbfs_file_open_bl
-ADD SP, 4
-
-SET C, 0 ; This will now be the address we're reading to
-    
-load_loop_bl:
-    ; Read a sector
-    SET PUSH, STATIC_FILE_BL ; Arg 1: file to read
-    SET PUSH, C ; Arg 2: place to read to
-    SET PUSH, BBFS_BL_WORDS_PER_SECTOR ; Arg 3: words to read. 
-    ; We happen to know a file can't EOF in the middle of a sector.
-    JSR bbfs_file_read_bl
-    SET A, POP
-    ADD SP, 2
-    
-    ; Else increment destination and loop
-    ADD C, BBFS_BL_WORDS_PER_SECTOR
-    
-    IFE A, BBFS_BL_ERR_EOF
-        ; Loop and read another sector
-        SET PC, load_done_bl
-    IFN A, BBFS_BL_ERR_NONE
-        ; We hit some other error
-        SET PC, error_bl
-    
-    ; Keep loading
-    SET PC, load_loop_bl
-        
-load_done_bl:
-    ; If we hit EOF, jump to 0
-    
-    ; Pass on the drive we were loaded from in A.
-    ; It's in B right now.
-    SET A, B
-    
-    SET PC, 0
-
-file_not_found_bl:
-    SET PUSH, str_not_found_bl
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    SET PC, halt_bl
-    
-error_bl:
-    SET PUSH, str_error_bl
-    SET PUSH, 1 ; With newline
-    SET A, WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
 halt_bl:
     SET PC, halt_bl
+    
+;; FUNCTIONS
+
+; get_fat_bl(sector)
+; Get the FAT entry for the given sector. Drive is read from B, which remains
+; untouched.
+; [Z]: Sector to read
+; Returns: FAT entry in [Z]
+get_fat_bl:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS Scratch
+    
+    ; Read FAT into buffer
+    ; TODO: don't do this every time
+    SET PUSH, [Z] ; Arg 1: Sector to read. We need to find the sector this sector in the FAT ends up being
+    ADD [SP], [STATIC_FAT_OFFSET_BL]
+    
+    DIV [SP], [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
+    ADD [SP], [STATIC_FAT_SECTOR_BL]
+    
+    SET PUSH, STATIC_FAT_CACHE_BL ; Arg 2: Pointer to read to
+    
+    SET PUSH, B ; Arg 3: drive
+    SET A, READ_DRIVE_SECTOR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 3
+    
+    ; Now grab the word in the FAT
+    SET A, [Z]
+    ADD A, [STATIC_FAT_OFFSET_BL]
+    MOD A, [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
+    SET [Z], [A+STATIC_FAT_CACHE_BL]
+    
+    ; Return
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 
-; bbfs_drive_load(drive_num, header*)
-; Load header info from the given drive to the given address.
-; [Z+1]: BBOS drive to operate on
-; [Z]: BBFS_BL_HEADER to operate on
-bbfs_drive_load_bl:
+; read_to_address_0_bl(start_sector)
+; Read the whole file starting at the given sector into memory, starting at
+; address 0. Drive is read from B, which remains untouched.
+; [Z]: sector number to start at
+; Returns: nothing, but clobbers Z by incrementing
+read_to_address_0_bl:
     ; Set up frame pointer
     SET PUSH, Z
     SET Z, SP
     ADD Z, 2
 
-    ; We loop 0, 1, 2 and load sectors 1, 2, 3    
-    SET PUSH, A ; BBOS command
-    SET PUSH, B ; Loop index
-    SET PUSH, C ; offset into header
+    SET PUSH, A ; BBOS scratch
+    SET PUSH, C ; Place to write to
     
-    SET B, 0
+    SET C, 0
+    
 .loop:
-    ; Calculate offset to write to
-    SET C, B
-    MUL C, BBFS_BL_WORDS_PER_SECTOR
-    ; Then offset from the header start
-    ADD C, [Z]
-    
-    ; Read the sector
-    SET PUSH, B ; Arg 1: Sector to read
-    ADD [SP], 1
-    SET PUSH, C ; Arg 2: Pointer to read to
-    SET PUSH, [Z+1] ; Arg 3: drive number
-    SET A, READ_DRIVE_SECTOR
-    INT BBOS_IRQ_MAGIC
-    ; TODO: We assume success
-    ADD SP, 3 
-    
-    ; Loop through 0, 1, and 2
-    ADD B, 1
-    IFL B, 3
-        SET PC, .loop
-.loop_break:
-    SET C, POP
-    SET B, POP
-    SET A, POP
-    SET Z, POP
-    SET PC, POP
-
-; bbfs_file_open(*file, *header, drive_num, sector_num)
-; Open an existing file at the given sector on the given drive, and populate the
-; file handle.
-; [Z+3]: BBFS_BL_FILE to populate
-; [Z+2]: BBFS_BL_HEADER to use
-; [Z+1]: BBOS drive number
-; [Z]: Sector at which the file starts
-; Returns: error code in [Z]
-bbfs_file_open_bl:
-    ; Set up frame pointer
-    SET PUSH, Z
-    SET Z, SP
-    ADD Z, 2
-    
-    SET PUSH, A ; Holds the file struct address
-    
-    ; Grab the file struct
-    SET A, [Z+3]
-
-    ; Populate the file struct
-    ; Fill in the drive
-    SET [A+BBFS_BL_FILE_DRIVE], [Z+1]
-    ; And header address
-    SET [A+BBFS_BL_FILE_FILESYSTEM_HEADER], [Z+2]
-    ; And the sector indexes
-    SET [A+BBFS_BL_FILE_START_SECTOR], [Z]
-    SET [A+BBFS_BL_FILE_SECTOR], [Z]
-    ; And zero the offset
-    SET [A+BBFS_BL_FILE_OFFSET], 0
-    
-    ; Read the right sector into the file struct's buffer. This clobbers A
+    ; Read a sector
     SET PUSH, [Z] ; Arg 1: Sector to read
-    SET PUSH, A ; Arg 2: Pointer to read to
-    ADD [SP], BBFS_BL_FILE_BUFFER
-    SET PUSH, [A+BBFS_BL_FILE_DRIVE] ; Arg 3: Drive to read from
+    SET PUSH, C ; Arg 2: pointer to read to
+    SET PUSH, B ; Arg 3: drive
     SET A, READ_DRIVE_SECTOR
     INT BBOS_IRQ_MAGIC
-    ; TODO: handle drive errors
     ADD SP, 3
-
-    ; Return success
-    SET [Z], BBFS_BL_ERR_NONE
-    SET A, POP
-    SET Z, POP
-    SET PC, POP
     
-; bbfs_file_read(*file, *data, size)
-; Read the given number of words from the given file into the given buffer.
-; [Z+2]: BBFS_BL_FILE to read from
-; [Z+1]: Buffer to read into
-; [Z]: Number of words to read
-; Returns: error code in [Z]
-; WARNING: This bootloader version only tracks file length to the nearest
-; sector!
-bbfs_file_read_bl:
-    ; Set up frame pointer
-    SET PUSH, Z
-    SET Z, SP
-    ADD Z, 2
-
-    SET PUSH, A ; BBOS calls, scratch
-    SET PUSH, B ; File struct address
-    SET PUSH, C ; Filesystem header struct address
-    SET PUSH, I ; Pointer into file buffer
-    SET PUSH, J ; Pointer into data
+    ; Check the FAT for this sector
+    SET PUSH, [Z]
+    JSR get_fat_bl
+    SET [Z], POP
     
-    ; We're going to decrement [Z] as we read words until it's 0
+    ; If the high bit is set, this was the last sector, so stop.
+    IFG [Z], 0x7FFF
+        SET PC, .done
+        
+    ; Next time write after the sector we just loaded
+    ADD C, [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
     
-    ; Load the file struct address
-    SET B, [Z+2]
-    ; And the FS header struct address
-    SET C, [B+BBFS_BL_FILE_FILESYSTEM_HEADER]
-    ; Point I at the word in the file buffer to read from
-    SET I, B
-    ADD I, BBFS_BL_FILE_BUFFER
-    ADD I, [B+BBFS_BL_FILE_OFFSET]
-    ; Point J at the data word to write
-    SET J, [Z+1]
+    ; Keep going with the next sector
+    SET PC, .loop
     
-.read_until_depleted:
-    IFE [Z], 0 ; No more words to read
-        SET PC, .done_reading
-    IFE [B+BBFS_BL_FILE_OFFSET], BBFS_BL_WORDS_PER_SECTOR
-        ; We've filled up our buffered sector
-        SET PC, .go_to_next_sector
-    
-    ; Otherwise read a word from the buffer, and move both pointers
-    STI [J], [I]
-    ; Consume one word from our to-do list
-    SUB [Z], 1
-    ; And one word of this sector
-    ADD [B+BBFS_BL_FILE_OFFSET], 1
-    
-    ; Loop around
-    SET PC, .read_until_depleted
-    
-.go_to_next_sector:
-
-    ; If we have a next sector allocated, go to that one
-    ; Look in the FAT at the current sector
-    SET A, C
-    ADD A, BBFS_BL_HEADER_FAT
-    ADD A, [B+BBFS_BL_FILE_SECTOR]
-    
-    IFG [A], 0x7FFF
-        ; Otherwise, the file is over
-        SET PC, .error_end_of_file
-    
-    ; Now [A] holds the next sector
-    ; Point the file at the start of the new sector
-    SET [B+BBFS_BL_FILE_SECTOR], [A]
-    SET [B+BBFS_BL_FILE_OFFSET], 0
-    
-    ; Load it from disk
-    ; Clobber A with the BBOS call
-    SET PUSH, [B+BBFS_BL_FILE_SECTOR] ; Arg 1: Sector to read
-    SET PUSH, B ; Arg 2: Pointer to write to
-    ADD [SP], BBFS_BL_FILE_BUFFER
-    SET PUSH, [B+BBFS_BL_FILE_DRIVE] ; Arg 3: Drive to read from
-    SET A, READ_DRIVE_SECTOR
-    INT BBOS_IRQ_MAGIC
-    SET A, POP
-    ADD SP, 2
-    
-    ; Handle drive errors
-    IFE A, 0
-        SET PC, .error_drive
-    
-    ; Move the cursor back to the start of the buffer
-    SET I, B
-    ADD I, BBFS_BL_FILE_BUFFER
-    ADD I, [B+BBFS_BL_FILE_OFFSET]
-    
-    ; Keep reading
-    SET PC, .read_until_depleted
-    
-.done_reading:
-    ; Return success
-    SET [Z], BBFS_BL_ERR_NONE
-    SET PC, .return
-    
-.error_end_of_file:
-    ; Return the end of file error
-    SET [Z], BBFS_BL_ERR_EOF
-    SET PC, .return
-    
-.error_drive:
-    ; Return drive error
-    SET [Z], BBFS_BL_ERR_DRIVE
-
-.return:
-    SET J, POP
-    SET I, POP
+    ; We loaded all the sectors
+.done:
     SET C, POP
-    SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP
     
-; bbfs_directory_open(*directory, *header, drive_num, sector_num)
-; Open an existing directory on disk,
-; [Z+3]: BBFS_BL_DIRECTORY to open into
-; [Z+2]: BBFS_BL_HEADER for the filesystem
-; [Z+1]: drive number to open from
-; [Z]: sector defining the directory's file.
-; Returns: error code in [Z]
-bbfs_directory_open_bl:
-    ; Set up frame pointer
-    SET PUSH, Z
-    SET Z, SP
-    ADD Z, 2
-    
-    SET PUSH, A ; BBFS_BL_DIRECTORY we're setting up
-    SET PUSH, B ; BBFS_BL_FILE for the directory
-    SET PUSH, C ; BBFS_BL_DIRHEADER we set up to read out
-    
-    SET A, [Z+3]
-    
-    ; Set B to the BBFS_BL_FILE for the directory
-    SET B, [Z+3]
-    ADD B, BBFS_BL_DIRECTORY_FILE
-    
-    ; Set C to a BBFS_BL_DIRHEADER on the stack
-    SUB SP, BBFS_BL_DIRHEADER_SIZEOF
-    SET C, SP
-    
-    ; Open the file
-    SET PUSH, B ; Arg 1: BBFS_BL_FILE to populate
-    SET PUSH, [Z+2] ; Arg 2: BBFS_BL_HEADER for the filesystem
-    SET PUSH, [Z+1] ; Arg 3: drive number
-    SET PUSH, [Z] ; Arg 4: sector defining file
-    JSR bbfs_file_open_bl
-    SET [Z], POP
-    ADD SP, 3
-    IFN [Z], BBFS_BL_ERR_NONE
-        SET PC, .return
-        
-    ; Read out the BBFS_BL_DIRHEADER
-    SET PUSH, B ; Arg 1: file
-    SET PUSH, C ; Arg 2: destination
-    SET PUSH, BBFS_BL_DIRHEADER_SIZEOF ; Arg 3: word count
-    JSR bbfs_file_read_bl
-    SET [Z], POP
-    ADD SP, 2
-    IFN [Z], BBFS_BL_ERR_NONE
-        SET PC, .return
-    
-    ; Make sure we opened a directory
-    IFN [C+BBFS_BL_DIRHEADER_VERSION], BBFS_BL_VERSION
-        SET PC, .error_notdir
-        
-    ; Fill in the number of remaining entries
-    SET [A+BBFS_BL_DIRECTORY_CHILDREN_LEFT], [C+BBFS_BL_DIRHEADER_CHILD_COUNT]
-    
-    ; We succeeded
-    SET [Z], BBFS_BL_ERR_NONE
-    SET PC, .return
-.error_notdir:
-    SET [Z], BBFS_BL_ERR_NOTDIR
-.return:
-    ADD SP, BBFS_BL_DIRHEADER_SIZEOF
-    SET C, POP
-    SET B, POP
-    SET A, POP
-    SET Z, POP
-    SET PC, POP
-    
-; bbfs_directory_next(*directory, *entry)
-; Get the next directory entry from an opened directory. If no entries are left,
-; returns BBFS_BL_ERR_EOF.
-; [Z+1]: BBFS_BL_DIRECTORY that has been opened
-; [Z]: BBFS_BL_DIRENTRY to populate
-; Returns: error code in [Z]
-bbfs_directory_next_bl:
-    ; Set up frame pointer
-    SET PUSH, Z
-    SET Z, SP
-    ADD Z, 2
-    
-    SET PUSH, A ; BBFS_BL_DIRECTORY
-    
-    SET A, [Z+1]
-    
-    ; Check to see if entries remain.
-    IFE [A+BBFS_BL_DIRECTORY_CHILDREN_LEFT], 0
-        SET PC, .error_eof
-        
-    ; Decrement remaining entries
-    SUB [A+BBFS_BL_DIRECTORY_CHILDREN_LEFT], 1
-    
-    ; Read from the file into the entry struct
-    SET PUSH, A ; Arg 1: file to read
-    ADD [SP], BBFS_BL_DIRECTORY_FILE
-    SET PUSH, [Z] ; Arg 2: place to read to
-    SET PUSH, BBFS_BL_DIRENTRY_SIZEOF ; Arg 3: words to read
-    JSR bbfs_file_read_bl
-    SET [Z], POP
-    ADD SP, 2
-    
-    ; Just return whatever error code we got when reading the file.
-    SET PC, .return
-.error_eof:
-    SET [Z], BBFS_BL_ERR_EOF
-.return:
-    SET A, POP
-    SET Z, POP
-    SET PC, POP
-    
-; bbfs_filename_compare(*packed1, *packed2)
+; bbfs_filename_compare_bl(*packed1, *packed2)
 ; Return 1 if the packed filenames match, 0 otherwise.
-; Performs case-insensitive comparison.
+; Performs case-insensitive comparison
 ; [Z+1]: Filename 1
 ; [Z]: Filename 2
 ; Return: 1 for match or 0 for mismatch in [Z]
@@ -575,7 +338,9 @@ bbfs_filename_compare_bl:
     SET Y, [B]
     SHR Y, 8
     
-    ; Filename 2 is always the built-in one which is already uppercase.
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
 
     IFN X, Y
         SET PC, .unequal
@@ -591,7 +356,9 @@ bbfs_filename_compare_bl:
     SET Y, [B]
     AND Y, 0xFF
     
-    ; Filename 2 is always the built-in one which is already uppercase.
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
 
     IFN X, Y
         SET PC, .unequal
@@ -599,7 +366,7 @@ bbfs_filename_compare_bl:
     ADD A, 1
     ADD B, 1
     ADD C, 1
-    IFL C, BBFS_BL_FILENAME_PACKED
+    IFL C, BBFS_FILENAME_PACKED
         SET PC, .loop
     
     ; If we get here they're equal
@@ -616,13 +383,51 @@ bbfs_filename_compare_bl:
     SET A, POP
     SET Z, POP
     SET PC, POP
+
+;; BBFS DEFINES
+
+define BBFS_VERSION 0xBF56
+
+; How big of sectors do we support
+define BBFS_MAX_SECTOR_SIZE 512
+; And how many? We need a sentinel value for "no sector"
+define BBFS_MAX_SECTOR_COUNT 0xFFFF
+; Where should the volume info live? Sector(s) before this are bootloader
+define BBFS_START_SECTOR 1
+
+; What's in a BBFS filesystem header on disk?
+; Only the version location and freemask start are predicatble
+; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
+define BBFS_HEADER_SIZEOF 1536
+define BBFS_HEADER_VERSION 0
+define BBFS_HEADER_FREEMASK 6
+define BBFS_HEADER_FAT 96
+
+define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
+define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
+
+; Structures:
+
+; BBFS_DIRHEADER: directory header structure
+define BBFS_DIRHEADER_SIZEOF 2
+define BBFS_DIRHEADER_VERSION 0
+define BBFS_DIRHEADER_CHILD_COUNT 1
+
+; BBFS_DIRENTRY: directory entry structure
+define BBFS_DIRENTRY_SIZEOF 10
+define BBFS_DIRENTRY_TYPE 0
+define BBFS_DIRENTRY_SECTOR 1
+define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
+
+;; CONSTANTS
     
+
 str_not_found_bl:
     .asciiz "BOOT.IMG not found"
 str_found_bl:
     .asciiz "Loading BOOT.IMG"
 str_intro_bl:
-    .asciiz "UBM Bootloader 2.0"
+    .asciiz "UBM Bootloader 3.0"
 str_copyright_bl:
     .asciiz "(C) UBM"
 str_error_bl:
@@ -639,14 +444,4 @@ packed_filename_bl:
     DAT 0x0000
     
 payload_measure_end_bl:
-
-; We statically allocate a directory, a direntry, and a file, but don't incluse
-; them in our image. We can't use labels in the defines; they all act like 0.
-; Instead we just place it safely one sector after the fixed bootloader address.
-define STATIC_DIRECTORY_BL BOOTLOADER_BASE+BBFS_BL_WORDS_PER_SECTOR
-define STATIC_FILE_BL STATIC_DIRECTORY_BL+BBFS_BL_DIRECTORY_SIZEOF
-define STATIC_DIRENTRY_BL STATIC_FILE_BL+BBFS_BL_FILE_SIZEOF
-define STATIC_HEADER_BL STATIC_DIRENTRY_BL+BBFS_BL_DIRENTRY_SIZEOF
-
-
 
