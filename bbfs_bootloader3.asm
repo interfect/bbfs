@@ -29,11 +29,11 @@ define STATIC_DRIVEPARAM_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE
 ; We need a sector cache for reading the FAT
 define STATIC_FAT_CACHE_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE
 ; A FAT start sector
-define STATIC_FAT_SECTOR_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+1
+define STATIC_FAT_SECTOR_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1
 ; And offset in that sector
-define STATIC_FAT_OFFSET_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+1+1
+define STATIC_FAT_OFFSET_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1+1
 ; And the sector at which the root directory starts
-define STATIC_ROOT_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+1+1+1
+define STATIC_ROOT_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1+1+1
 ; TODO: why can't these base on eachother???
 
 
@@ -160,10 +160,57 @@ JSR read_to_address_0
 ADD SP, 1
 
 ; Scan for boot.img
+; Use A to index child in the directory
+SET A, 0
 
-; if not found, complain
+scan_loop:
+; If we use up all the children, complain
+IFE A, [BBFS_DIRHEADER_CHILD_COUNT]
+    SET PC, not_found
 
+; Compare filename of this entry and correct packed filename
+SET PUSH, A ; Arg 1: pointer to packed filename
+MUL [SP], BBFS_DIRENTRY_SIZEOF
+ADD [SP], BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_NAME ; Need to offset by name in entry and by header before entries
+SET PUSH, packed_filename_bl ; Arg 2: other packed filename
+JSR bbfs_filename_compare
+SET C, POP
+ADD SP, 1
+
+; We have a match!
+IFE C, 1
+    SET PC, found
+
+
+; Look at the next entry
+ADD A, 1
+SET PC, scan_loop
+
+found:
 ; If found, read it to address 0
+; First calculate the memory location of the start sector for this file
+MUL A, BBFS_DIRENTRY_SIZEOF
+ADD A, BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_SECTOR
+
+SET [0xAAAA], 0xAAAA
+
+; Read all from that sector into memory
+SET PUSH, [A] ; Arg 1: sector to start at
+JSR read_to_address_0
+ADD SP, 1
+
+; Actually execute the loaded code
+; Make sure to pass drive in A
+SET A, B
+SET PC, 0
+
+not_found:
+; We didn't find the boot image
+SET PUSH, str_not_found_bl
+SET PUSH, 1 ; With newline
+SET A, WRITE_STRING
+INT BBOS_IRQ_MAGIC
+ADD SP, 2
 
 halt_bl:
     SET PC, halt_bl
@@ -187,9 +234,10 @@ get_fat:
     ; TODO: don't do this every time
     SET PUSH, [Z] ; Arg 1: Sector to read. We need to find the sector this sector in the FAT ends up being
     ADD [SP], [STATIC_FAT_OFFSET_BL]
+    
     DIV [SP], [STATIC_DRIVEPARAM_BL+DRIVE_SECT_SIZE]
     ADD [SP], [STATIC_FAT_SECTOR_BL]
-
+    
     SET PUSH, STATIC_FAT_CACHE_BL ; Arg 2: Pointer to read to
     
     SET PUSH, B ; Arg 3: drive
@@ -240,7 +288,7 @@ read_to_address_0:
     SET [Z], POP
     
     ; If the high bit is set, this was the last sector, so stop.
-    IFG [Z], 0x7999
+    IFG [Z], 0x7FFF
         SET PC, .done
         
     ; Next time write after the sector we just loaded
@@ -252,6 +300,86 @@ read_to_address_0:
     ; We loaded all the sectors
 .done:
     SET C, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; bbfs_filename_compare(*packed1, *packed2)
+; Return 1 if the packed filenames match, 0 otherwise.
+; Performs case-insensitive comparison
+; [Z+1]: Filename 1
+; [Z]: Filename 2
+; Return: 1 for match or 0 for mismatch in [Z]
+bbfs_filename_compare:
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Filename 1 addressing
+    SET PUSH, B ; Filename 2 addressing
+    SET PUSH, C ; Character counter
+    SET PUSH, X ; Filename 1 character
+    SET PUSH, Y ; Filename 2 character
+    
+    SET A, [Z+1] ; Load string 1
+    SET B, [Z] ; And string 2
+    
+    SET C, 0
+.loop:
+    ; Unpack character 1 from filename 1
+    SET X, [A]
+    SHR X, 8
+    
+    IFG X, 0x60 ; If it's greater than ` (char before a)
+        IFL X, 0x7B ; And less than { (char after z)
+            SUB X, 32 ; Knock it down to upper case
+            
+    ; Also character 1 from filename 2
+    SET Y, [B]
+    SHR Y, 8
+    
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
+
+    IFN X, Y
+        SET PC, .unequal
+        
+    ; And character 2 from each
+    SET X, [A]
+    AND X, 0xFF
+    
+    IFG X, 0x60 ; If it's greater than ` (char before a)
+        IFL X, 0x7B ; And less than { (char after z)
+            SUB X, 32 ; Knock it down to upper case
+            
+    SET Y, [B]
+    AND Y, 0xFF
+    
+    IFG Y, 0x60 ; If it's greater than ` (char before a)
+        IFL Y, 0x7B ; And less than { (char after z)
+            SUB Y, 32 ; Knock it down to upper case
+
+    IFN X, Y
+        SET PC, .unequal
+        
+    ADD A, 1
+    ADD B, 1
+    ADD C, 1
+    IFL C, BBFS_FILENAME_PACKED
+        SET PC, .loop
+    
+    ; If we get here they're equal
+    SET [Z], 1
+    SET PC, .return
+    
+.unequal:
+    SET [Z], 0
+.return:
+    SET Y, POP
+    SET X, POP
+    SET C, POP
+    SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP
@@ -274,6 +402,9 @@ define BBFS_HEADER_SIZEOF 1536
 define BBFS_HEADER_VERSION 0
 define BBFS_HEADER_FREEMASK 6
 define BBFS_HEADER_FAT 96
+
+define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
+define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
 
 ; Structures:
 
