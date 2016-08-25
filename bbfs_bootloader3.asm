@@ -6,6 +6,8 @@
 ; Keeps itself at a fixed address, so there's a limit to the amount of code it
 ; can load.
 
+
+
 define BOOTLOADER_BASE 0xd000
 
 ; We statically allocate a directory, a direntry, and a file, but don't include
@@ -257,29 +259,8 @@ bbfs_device_get:
         ; Already loaded!
         SET PC, .skip_load    
     
-    IFE [B+BBFS_DEVICE_SECTOR], BBFS_MAX_SECTOR_COUNT
-        ; Nothing to save!
-        SET PC, .skip_save    
+    ; BOOTLOADER: save functionality removed. Only read.
     
-    ; Otherwise we need to save the sector
-
-    SET PUSH, [B+BBFS_DEVICE_SECTOR] ; Arg 1: Sector to write
-    SET PUSH, B ; Arg 2: Pointer to write from
-    ADD [SP], BBFS_DEVICE_BUFFER 
-    SET PUSH, [B+BBFS_DEVICE_DRIVE] ; Arg 3: drive number
-    SET A, WRITE_DRIVE_SECTOR
-    INT BBOS_IRQ_MAGIC
-    
-    ; Handle error return
-    IFE [SP], 1
-        SET PC, .save_success
-    ADD SP, 3
-    SET PC, .error
-.save_success:
-    ; Clean up stack
-    ADD SP, 3
-    
-.skip_save:
     ; Now we saved the existing sector (or don't need to), so load the new one
     
     SET PUSH, [Z] ; Arg 1: Sector to read
@@ -556,6 +537,8 @@ bbfs_volume_open:
     SET Z, POP
     SET PC, POP
 
+; BOOTLOADER: Open and read assume all sectors are full.
+
 ; bbfs_file_open(*file, *volume, drive_num, sector_num)
 ; Open an existing file at the given sector on the given drive, and populate the
 ; file handle.
@@ -570,8 +553,6 @@ bbfs_file_open:
     ADD Z, 2
     
     SET PUSH, A ; Holds the file struct address
-    SET PUSH, B ; Scratch for FAT interrogation
-    SET PUSH, C ; Device, words per sector
     
     ; Grab the file struct
     SET A, [Z+2]
@@ -585,35 +566,16 @@ bbfs_file_open:
     ; And zero the offset
     SET [A+BBFS_FILE_OFFSET], 0
     
-    ; Load the number of words available to read in the sector, which we get
-    ; from the FAT.
-    SET PUSH, [Z+1] ; Arg 1: volume
-    SET PUSH, [Z] ; Arg 2: sector number
-    JSR bbfs_volume_fat_get
-    SET B, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
-    ADD SP, 1
+    ; Assume the sector is full.
     
-    IFL B, 0x8000
-        ; The high bit is unset, so this first sector is not also the last and
-        ; is guaranteed to be full
-        SET PC, .sector_is_full
-    SET PC, .sector_not_full
-.sector_is_full:
     ; The sector is full, but how many words is that?
     SET PUSH, [A+BBFS_FILE_VOLUME] ; Arg 1: volume to get device for
     JSR bbfs_volume_get_device
-    SET C, POP
-    
-    SET PUSH, C ; Arg 1: device to get sector size for
+    ; Leave result on stack
+    ; Arg 1: device to get sector size for
     JSR bbfs_device_sector_size
-    SET B, POP ; Our words remaining is the words per sector of the device
-    
-.sector_not_full:
-    AND B, 0x7FFF ; Take everything but the high bit
-    ; And say that that's the current file length within this sector.
-    SET [A+BBFS_FILE_MAX_OFFSET], B 
+    ; Say that that's the current file length within this sector.
+    SET [A+BBFS_FILE_MAX_OFFSET], POP 
     
     ; Return success
     SET [Z], BBFS_ERR_NONE
@@ -622,8 +584,6 @@ bbfs_file_open:
 .error_stack:
     SET [Z], POP
 .return:
-    SET C, POP
-    SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP
@@ -730,25 +690,9 @@ bbfs_file_read:
     SET [B+BBFS_FILE_SECTOR], A
     SET [B+BBFS_FILE_OFFSET], 0
     
-    ; Load the number of words available to read in the sector from its FAT
-    ; entry. We need to do this first because otherwise it would touch the
-    ; device and invalidate the sector pointer.
-    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1: volume
-    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2: sector
-    JSR bbfs_volume_fat_get
-    SET A, POP
-    IFN [SP], BBFS_ERR_NONE
-        SET PC, .error_stack
-    ADD SP, 1
-    
-    IFL A, 0x8000
-        ; The high bit is unset, so this sector is not the last and is
-        ; guaranteed to be full
-        SET A, Y
-    
-    AND A, 0x7FFF ; Take everything but the high bit
+    ; BOOTLOADER: assume sector is full
     ; And say that that's the current file length within this sector.
-    SET [B+BBFS_FILE_MAX_OFFSET], A 
+    SET [B+BBFS_FILE_MAX_OFFSET], Y 
     
     ; Load the sector from disk
     SET PUSH, C ; Arg 1: device
