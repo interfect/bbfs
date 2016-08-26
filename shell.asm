@@ -2075,6 +2075,9 @@ shell_builtin_load:
     JSR bbfs_file_read
     SET A, POP
     ADD SP, 2
+    
+    SET PC, halt
+    
     IFE A, BBFS_ERR_EOF
         ; We hit EOF so we're done copying
         SET PC, .load_done
