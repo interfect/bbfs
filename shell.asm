@@ -188,6 +188,12 @@ command_loop:
 ;   Load a file at address 0 and execute it. Loaded code can try returning with
 ;   a SET PC, POP if it didn't clobber our memory, in which case this function
 ;   returns 1. If the file could not be loaded, this function returns 0.
+;
+; shell_builtin_image(*arguments)
+;   Images the disk in the drive given as the first argument to the file named
+;   with the second argument. Filenames may be prefixed as <DRIVE>:\. Saves
+;   complete sectors of the disk, until a sector of all 0s is encountered or the
+;   entire disk is imaged.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -911,7 +917,7 @@ shell_builtin_format:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    set PC, .say_drive_and_return
+    SET PC, .say_drive_and_return
     
 .error_bad_drive_letter:
     
@@ -934,7 +940,7 @@ shell_builtin_format:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    set PC, .say_drive_and_return
+    SET PC, .say_drive_and_return
     
 .error_no_media:
 
@@ -1181,7 +1187,7 @@ shell_builtin_dir:
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    set PC, .say_drive_and_return
+    SET PC, .say_drive_and_return
     
 .error_no_media:
 
@@ -2140,6 +2146,397 @@ shell_builtin_load:
     SET Z, POP
     SET PC, POP
     
+; shell_builtin_image(*arguments)
+; Copy disk to file, with drive letter support.
+; [Z]: argument string
+shell_builtin_image:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS calls/scratch
+    SET PUSH, B ; Drive to read from
+    SET PUSH, C ; Destination file name
+    SET PUSH, X ; Sector being read
+    SET PUSH, Y ; Scratch for iterating through sector
+    SET PUSH, I ; Device sector size
+    
+    ; Parse the command line
+    ; Split out the drive letter
+    
+    ; Try and read a drive number from the argument string
+    SET B, [Z]
+    SET B, [B]
+    
+    ; If it's in the lower-case ASCII range, upper-case it
+    IFL B, 0x7B
+        IFG B, 0x60
+            SUB B, 32
+            
+    IFL B, 0x41
+        ; 'A' is the first valid drive letter
+        SET PC, .error_bad_drive_letter
+        
+    IFG B, 0x5A
+        ; 'Z' is the last possible drive letter
+        SET PC, .error_bad_drive_letter
+        
+    ; Convert from drive letter to drive number.
+    SUB B, 0x41
+    
+    ; Get the drive count from BBOS
+    SUB SP, 1
+    SET A, GET_DRIVE_COUNT
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    SUB A, 1 ; We know we have 1 drive, so knock this down to (probably) 7
+    IFG B, A
+        ; We're out of bounds wrt the drives installed
+        SET PC, .error_no_drive
+        
+    ; Now check to make sure there's a disk
+    SET PUSH, B
+    SET A, CHECK_DRIVE_STATUS
+    INT BBOS_IRQ_MAGIC
+    SET A, POP
+    
+    ; Shift down to have only the high (status) octet
+    SHR A, 8
+    
+    ; Check to make sure we have a ready disk
+    IFE A, STATE_NO_MEDIA
+        SET PC, .error_no_media
+        
+    IFN A, STATE_READY_WP
+        IFN A, STATE_READY
+            SET PC, .error_unknown
+            
+    ; Now finish parsing the destination filename
+    ; Start filename after the drive
+    SET C, [Z] 
+    ADD C, 1
+    
+    ; We need a space
+    IFN [C], 0x20
+        SET PC, .error_usage
+        
+    ; Null it out
+    SET [C], 0
+    ADD C, 1
+    
+    ; Slide over all other spaces
+.parse_spaces_loop:
+    IFE [C], 0 ; No second filename
+        SET PC, .error_usage
+    IFN [C], 0x20 ; Found a space
+        SET PC, .parse_spaces_done
+        
+    ; Try the next character
+    ADD C, 1
+    SET PC, .parse_spaces_loop
+    
+.parse_spaces_done:
+    ; Now we found the start of the second filename.
+    ; We want to go out and null out the first space after the filename, if any.
+    SET A, C
+    
+.parse_second_filename_loop:
+    IFE [A], 0
+        ; We hit the end and found no spaces
+        SET PC, .parse_second_filename_done
+    IFE [A], 0x20
+        ; We found a trailing space
+        SET PC, .parse_second_filename_done
+    
+    ; Try the next character
+    ADD A, 1
+    SET PC, .parse_second_filename_loop
+    
+.parse_second_filename_done:
+    ; Zero out this character, which may be a space
+    SET [A], 0
+    
+    ; We have now parsed our arguments
+    
+    ; Set up filesystem globals
+    
+    ; Set up filesystem globals
+    ; Drive2 is currently unused
+    SET [drive2], 0xFFFF
+    
+    ; Set up main drive device
+    SET PUSH, device
+    SET PUSH, [drive]
+    JSR bbfs_device_open
+    ADD SP, 2 ; Can't fail
+        
+    ; And main drive volume
+    SET PUSH, volume
+    SET PUSH, device
+    JSR bbfs_volume_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Set up raw drive as the destination drive
+    SET [drive_raw], B
+    SET PUSH, device_raw ; Arg 1: devide to fill
+    SET PUSH, [drive_raw] ; Arg 2: drive to open
+    JSR bbfs_device_open
+    SET A, POP
+    ADD SP, 1
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+    
+    ; Open the destination file, creating
+    ; It may be on either drive, but it will only make a proper consistent image
+    ; if we're on not the drive being imaged.
+    SET PUSH, file ; Arg 1: file to populate
+    SET PUSH, C ; Arg 2: unpacked filename string
+    SET PUSH, 1 ; Arg 3: create flag
+    JSR shell_open
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Work out what disk it is on
+    SET PUSH, [file+BBFS_FILE_VOLUME]
+    JSR bbfs_volume_get_device
+    SET A, POP
+
+    ; We can't have tow devices trying to use the same drive. They'll confuse
+    ; each other with caches.    
+    IFE [A+BBFS_DEVICE_DRIVE], [drive_raw]
+        SET PC, .error_same_drive
+    
+    ; Truncate the file (in case it existed already)
+    SET PUSH, file ; Arg 1: file to truncate
+    JSR bbfs_file_truncate
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Decide how long source disk sectors are
+    SET PUSH, device_raw ; Arg 1 for argument call: device
+    JSR bbfs_device_sector_size ; Get the device sector size
+    SET I, POP
+    
+    ; Until EOF, read a sector from the source disk and write it to the file. 
+    SET X, 0
+.copy_loop:
+
+    ; Read from the disk
+    ; bbfs_device_get(device*, word sector)
+    SET PUSH, device_raw ; Arg 1: device to read from
+    SET PUSH, X ; Arg 2: Sector to read
+    JSR bbfs_device_get
+    SET A, POP
+    ADD SP, 1
+    
+    ; If we can't read the sector, something is wrong
+    IFE A, 0x0000
+        SET PC, .error_unknown
+        
+    ; Now look for a whole sector of 0s
+    SET Y, A
+.scan_loop:
+    IFN [Y], 0
+        SET PC, .scan_done
+    ADD Y, 1
+    ; Look at how far we are from the start.
+    SUB Y, A
+    ; If we made it all the way to the end of the sector and saw nothing
+    ; nonzero, don't bother writing the sector.
+    IFE Y, I
+        SET PC, .copy_done
+    ; Otherwise keep looping
+    ADD Y, A
+    SET PC, .scan_loop
+    
+.scan_done:
+    ; Write to file
+    SET PUSH, file ; Arg 1: file
+    SET PUSH, A ; Arg 2: buffer
+    SET PUSH, I ; Arg 3: length to write (a whole sector for source disk)
+    JSR bbfs_file_write
+    SET A, POP
+    ADD SP, 2
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; Try the next sector
+    ADD X, 1
+    
+    ; Figure out if we're done due to seeing all the sectors
+    SET PUSH, device_raw ; Arg 1 for argument call: device
+    JSR bbfs_device_sector_count ; Get the device sector count
+    SET A, POP
+    
+    ; If we're at the past the end sector to do next, stop
+    IFE X, A
+        SET PC, .copy_done
+        
+    SET PC, .copy_loop
+
+.copy_done:
+    ; We read and wrote all the words.
+    
+    ; Sync file
+    SET PUSH, file ; Arg 1: file to flush
+    JSR bbfs_file_flush
+    SET A, POP
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_A
+        
+    ; We were successful.
+    ; Print success.
+    SET PUSH, str_image_imaged ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, [Z] ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, str_image_to ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PUSH, C ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+        
+.error_usage:
+    ; The user doesn't know how to run the command
+    ; Print usage.
+    
+    SET PUSH, str_image_usage ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_same_drive:
+    ; Can't image a drive to itself
+    
+    SET PUSH, str_image_same ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_unknown:
+    ; Something terrible has happened. Probably not being able to read the input
+    ; disk...
+    
+    SET PUSH, str_error_unknown ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .return
+    
+.error_bad_drive_letter:
+    
+    ; Put the error message
+    SET PUSH, str_image_usage ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    set PC, .return
+    
+.error_no_drive:
+    
+    ; Put the error message
+    SET PUSH, str_no_drive ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .say_drive_and_return
+    
+.error_no_media:
+
+    ; Put the error message
+    SET PUSH, str_no_media ; Arg 1: string to print
+    SET PUSH, 0 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    SET PC, .say_drive_and_return
+    
+.say_drive_and_return:
+    ; Put the drive letter
+    SET PUSH, B ; Arg 1: Character to print
+    ADD [SP], 0x41 ; Add to 'A'
+    SET PUSH, 1 ; Arg 2: move cursor
+    SET A, WRITE_CHAR
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Put a colon and a newline
+    SET PUSH, str_colon ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Return
+    SET PC, .return
+
+.error_A:
+    ; We had an error, code is in A
+    ; TODO: attribute it to an operand
+    
+    ; Keep the error message string in B
+    SET B, str_error_unknown
+    
+    ; Override it if we can be more specific
+    IFE A, BBFS_ERR_NOTFOUND
+        SET B, str_error_not_found
+    IFE A, BBFS_ERR_DRIVE
+        SET B, str_error_drive
+    
+    ; Print the error
+    SET PUSH, B ; Arg 1: string to print
+    SET PUSH, 1 ; Arg 2: whether to print a newline
+    SET A, WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+.return:
+    SET I, POP
+    SET Y, POP
+    SET X, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
 halt:
     ; We can jump here for debugging
     SET PC, halt
@@ -2153,7 +2550,7 @@ str_ready:
 str_prompt:
     .asciiz ":\> "
 str_ver_version1:
-    .asciiz "DC-DOS Command Interpreter 1.2"
+    .asciiz "DC-DOS Command Interpreter 1.3"
 str_ver_version2:
     .asciiz "Copyright (C) UBM Corporation"
 str_not_found:
@@ -2182,6 +2579,14 @@ str_copy_to:
     .asciiz " to "
 str_copy_usage:
     .asciiz "Usage: COPY <FILE1> <FILE2>"
+str_image_imaged:
+    .asciiz "Imaged drive "
+str_image_to:
+    .asciiz " to "
+str_image_usage:
+    .asciiz "Usage: IMAGE <DRIVE> <FILE>"
+str_image_same:
+    .asciiz "Can't image drive to itself"
 str_error_not_found:
     .asciiz "File not found"
 str_error_drive:
@@ -2217,6 +2622,8 @@ str_builtin_del:
     .asciiz "DEL"
 str_builtin_load:
     .asciiz "LOAD"
+str_builtin_image:
+    .asciiz "IMAGE"
 
 ; Builtins table
 ;
@@ -2241,6 +2648,9 @@ builtins_table:
     ; LOAD builtin
     DAT str_builtin_load
     DAT shell_builtin_load
+    ; IMAGE builtin
+    DAT str_builtin_image
+    DAT shell_builtin_image
     ; No more builtins
     DAT 0
     DAT 0
@@ -2293,6 +2703,11 @@ volume2:
 ; And two files (which may be on either drive)
 file2:
     .reserve BBFS_FILE_SIZEOF
+; We also sometimes need a raw drive with no FS
+drive_raw:
+    .reserve 1
+device_raw:
+    .reserve BBFS_DEVICE_SIZEOF
 ; We need a place to put the code that moves the main code into high memory We
 ; save it so we can write it out if we need to format a disk. We can't just
 ; leave it at the front of our code because then we can't get the .orgs to match
