@@ -17,41 +17,13 @@
 
 
 #include "bbos.inc.asm"
+#include "bbfs.inc.asm"
 
-;; BBFS DEFINES
-
-define BBFS_VERSION 0xBF56
-
-; How big of sectors do we support
-define BBFS_MAX_SECTOR_SIZE 512
-; And how many? We need a sentinel value for "no sector"
-define BBFS_MAX_SECTOR_COUNT 0xFFFF
-; Where should the volume info live? Sector(s) before this are bootloader
-define BBFS_START_SECTOR 1
-
-; What's in a BBFS filesystem header on disk?
-; Only the version location and freemask start are predicatble
-; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
-define BBFS_HEADER_SIZEOF 1536
-define BBFS_HEADER_VERSION 0
-define BBFS_HEADER_FREEMASK 6
-define BBFS_HEADER_FAT 96
-
-define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
-define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
-
-; Structures:
-
-; BBFS_DIRHEADER: directory header structure
-define BBFS_DIRHEADER_SIZEOF 2
-define BBFS_DIRHEADER_VERSION 0
-define BBFS_DIRHEADER_CHILD_COUNT 1
-
-; BBFS_DIRENTRY: directory entry structure
-define BBFS_DIRENTRY_SIZEOF 10
-define BBFS_DIRENTRY_TYPE 0
-define BBFS_DIRENTRY_SECTOR 1
-define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
+; Consele API that we need
+; Write Char              0x1003  Char, MoveCursor        None            1.0
+; Write String            0x1004  StringZ, NewLine        None            1.0
+define WRITE_CHAR 0x1003
+define WRITE_STRING 0x1004
 
 define BOOTLOADER_BASE 0xd000
 
@@ -70,25 +42,6 @@ define STATIC_FAT_OFFSET_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE
 ; And the sector at which the root directory starts
 define STATIC_ROOT_BL BOOTLOADER_BASE+BBFS_MAX_SECTOR_SIZE+DRIVEPARAM_SIZE+BBFS_MAX_SECTOR_SIZE+1+1+1
 ; TODO: why can't these base on eachother???
-
-
-; Consele API that we need
-; Write Char              0x1003  Char, MoveCursor        None            1.0
-; Write String            0x1004  StringZ, NewLine        None            1.0
-define WRITE_CHAR 0x1003
-define WRITE_STRING 0x1004
-
-; BBOS drive API
-; Get Drive Count         0x2000  OUT Drive Count         Drive Count     1.0
-; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
-; Get Drive Parameters    0x2002  *DriveParams, DriveNum  None            1.0
-; Read Drive Sector       0x2003  Sector, Ptr, DriveNum   Success         1.0
-; Write Drive Sector      0x2004  Sector, Ptr, DriveNum   Success         1.0
-define GET_DRIVE_COUNT 0x2000
-define CHECK_DRIVE_STATUS 0x2001
-define GET_DRIVE_PARAMETERS 0x2002
-define READ_DRIVE_SECTOR 0x2003
-define WRITE_DRIVE_SECTOR 0x2004
 
 ; This code starts at 0 and is just smart enough to copy the rest to the bootloader base address.
 .org 0
