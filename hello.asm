@@ -10,11 +10,6 @@
 #include "bbos.inc.asm"
 define WRITE_STRING 0x1004
 
-DAT 0xCAFE
-DAT 0xBABE
-
-SET PC, 0
-
 SET PUSH, str_hello
 SET PUSH, 1 ; With newline
 SET A, WRITE_STRING

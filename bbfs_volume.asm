@@ -532,7 +532,7 @@ bbfs_volume_fat_set:
 ;   sector number if high bit is off, or words used in sector if high bit is
 ;   on). Returns FAT entry, and an error code.
 ; [Z+1]: BBFS_VOLUME to work on
-; [Z]: sector number to mark 
+; [Z]: sector number to get entry for 
 ; Returns: FAT entry in [Z], error code in [Z+1]
 bbfs_volume_fat_get:
     ; Set up frame pointer

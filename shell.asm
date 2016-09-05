@@ -2006,6 +2006,7 @@ shell_builtin_load:
     
     SET PUSH, A ; BBOS calls, scratch
     SET PUSH, B ; Cursor for where we're reading to.
+    SET PUSH, C ; Progress words/scratch
     
     ; Parse the command line
     ; Split out the first filename
@@ -2066,6 +2067,9 @@ shell_builtin_load:
     ; Prepare to load
     SET B, 0 ; Load at 0
     
+    ; Mark 0 so we know if we load anything.
+    SET [B], 0xFFFF
+    
 .load_loop:
     ; Read words from the file until EOF. Since we're guaranteed partial read
     ; success when hitting the EOF, we can just read in big chunks.
@@ -2073,10 +2077,9 @@ shell_builtin_load:
     SET PUSH, B ; Arg 2: buffer
     SET PUSH, BBFS_WORDS_PER_SECTOR ; Arg 3: length
     JSR bbfs_file_read
-    SET A, POP
-    ADD SP, 2
-    
-    SET PC, halt
+    SET A, POP ; Read error code
+    SET C, POP ; Read words read
+    ADD SP, 1
     
     IFE A, BBFS_ERR_EOF
         ; We hit EOF so we're done copying
@@ -2144,6 +2147,7 @@ shell_builtin_load:
     
     SET PC, .return
 .return:
+    SET C, POP
     SET B, POP
     SET A, POP
     SET Z, POP
@@ -2284,15 +2288,13 @@ shell_builtin_image:
     IFN A, BBFS_ERR_NONE
         SET PC, .error_A
         
-    ; Set up raw drive as the destination drive
+    ; Set up raw drive as the source drive
     SET [drive_raw], B
     SET PUSH, device_raw ; Arg 1: devide to fill
     SET PUSH, [drive_raw] ; Arg 2: drive to open
     JSR bbfs_device_open
-    SET A, POP
-    ADD SP, 1
-    IFN A, BBFS_ERR_NONE
-        SET PC, .error_A
+    ; Remember, no return code!
+    ADD SP, 2
     
     ; Open the destination file, creating
     ; It may be on either drive, but it will only make a proper consistent image
@@ -2311,7 +2313,7 @@ shell_builtin_image:
     JSR bbfs_volume_get_device
     SET A, POP
 
-    ; We can't have tow devices trying to use the same drive. They'll confuse
+    ; We can't have two devices trying to use the same drive. They'll confuse
     ; each other with caches.    
     IFE [A+BBFS_DEVICE_DRIVE], [drive_raw]
         SET PC, .error_same_drive
@@ -2522,7 +2524,9 @@ shell_builtin_image:
         SET B, str_error_not_found
     IFE A, BBFS_ERR_DRIVE
         SET B, str_error_drive
-    
+    IFE A, 0x1
+        SET B, str_error_busy
+        
     ; Print the error
     SET PUSH, B ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
@@ -2594,6 +2598,8 @@ str_error_not_found:
     .asciiz "File not found"
 str_error_drive:
     .asciiz "Drive invalid"
+str_error_busy:
+    .asciiz "Drive busy"
 str_del_usage:
     .asciiz "Usage: DEL <FILE>"
 str_del_deleted:

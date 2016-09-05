@@ -202,9 +202,10 @@ bbfs_file_flush:
     SET Z, SP
     ADD Z, 2
     
-    SET PUSH, A ; FAT word value, scratch
+    SET PUSH, A ; FAT word value, scratch/error code
     SET PUSH, B ; BBFS_FILE struct addressing
     SET PUSH, C ; words per sector for this device
+    SET PUSH, X ; Old FAT word
 
     SET B, [Z] ; Load the address of the file struct
     
@@ -213,11 +214,23 @@ bbfs_file_flush:
     JSR bbfs_device_sector_size ; Just leave the device on the stack
     SET C, POP
     
-    IFE [B+BBFS_FILE_MAX_OFFSET], C
-        ; The whole of this sector is actually used, so we can just sync the
-        ; device
-        SET PC, .skip_fat
+    ; Now we have to sync to the FAT. We want to save the file size if we're the
+    ; last sector in the file. Otherwise we want to leave the FAT alone.
+    
+    ; Load what was in the FAT
+    SET PUSH, [B+BBFS_FILE_VOLUME] ; Arg 1 - volume
+    SET PUSH, [B+BBFS_FILE_SECTOR] ; Arg 2 - sector
+    JSR bbfs_volume_fat_get
+    SET X, POP ; Old FAT word
+    SET A, POP ; Error code
+    
+    IFN A, BBFS_ERR_NONE
+        SET PC, .error_a
         
+    ; If we aren't tracking this sector's length, we don't want to touch the FAT
+    IFL X, 0x8000
+        SET PC, .skip_fat
+    
     ; Save the number of words
     SET A, [B+BBFS_FILE_MAX_OFFSET]
     ; Set the high bit to mark it a last sector
@@ -252,6 +265,7 @@ bbfs_file_flush:
 .error_a:
     SET [Z], A
 .return:
+    SET X, POP
     SET C, POP
     SET B, POP
     SET A, POP

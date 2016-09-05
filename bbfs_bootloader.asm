@@ -18,6 +18,41 @@
 
 #include "bbos.inc.asm"
 
+;; BBFS DEFINES
+
+define BBFS_VERSION 0xBF56
+
+; How big of sectors do we support
+define BBFS_MAX_SECTOR_SIZE 512
+; And how many? We need a sentinel value for "no sector"
+define BBFS_MAX_SECTOR_COUNT 0xFFFF
+; Where should the volume info live? Sector(s) before this are bootloader
+define BBFS_START_SECTOR 1
+
+; What's in a BBFS filesystem header on disk?
+; Only the version location and freemask start are predicatble
+; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
+define BBFS_HEADER_SIZEOF 1536
+define BBFS_HEADER_VERSION 0
+define BBFS_HEADER_FREEMASK 6
+define BBFS_HEADER_FAT 96
+
+define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
+define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
+
+; Structures:
+
+; BBFS_DIRHEADER: directory header structure
+define BBFS_DIRHEADER_SIZEOF 2
+define BBFS_DIRHEADER_VERSION 0
+define BBFS_DIRHEADER_CHILD_COUNT 1
+
+; BBFS_DIRENTRY: directory entry structure
+define BBFS_DIRENTRY_SIZEOF 10
+define BBFS_DIRENTRY_TYPE 0
+define BBFS_DIRENTRY_SECTOR 1
+define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
+
 define BOOTLOADER_BASE 0xd000
 
 ; We statically allocate a directory, a direntry, and a file, but don't include
@@ -383,41 +418,6 @@ bbfs_filename_compare_bl:
     SET A, POP
     SET Z, POP
     SET PC, POP
-
-;; BBFS DEFINES
-
-define BBFS_VERSION 0xBF56
-
-; How big of sectors do we support
-define BBFS_MAX_SECTOR_SIZE 512
-; And how many? We need a sentinel value for "no sector"
-define BBFS_MAX_SECTOR_COUNT 0xFFFF
-; Where should the volume info live? Sector(s) before this are bootloader
-define BBFS_START_SECTOR 1
-
-; What's in a BBFS filesystem header on disk?
-; Only the version location and freemask start are predicatble
-; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
-define BBFS_HEADER_SIZEOF 1536
-define BBFS_HEADER_VERSION 0
-define BBFS_HEADER_FREEMASK 6
-define BBFS_HEADER_FAT 96
-
-define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
-define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
-
-; Structures:
-
-; BBFS_DIRHEADER: directory header structure
-define BBFS_DIRHEADER_SIZEOF 2
-define BBFS_DIRHEADER_VERSION 0
-define BBFS_DIRHEADER_CHILD_COUNT 1
-
-; BBFS_DIRENTRY: directory entry structure
-define BBFS_DIRENTRY_SIZEOF 10
-define BBFS_DIRENTRY_TYPE 0
-define BBFS_DIRENTRY_SECTOR 1
-define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
 
 ;; CONSTANTS
     
