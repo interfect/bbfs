@@ -161,7 +161,7 @@ define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
 ; Error codes:
 
 define BBFS_ERR_NONE                0x0000 ; No error; operation succeeded
-define BBFS_ERR_DRIVE               0x0005 ; Drive number is invalid
+define BBFS_ERR_DRIVE               0x0005 ; Drive returned an error
 define BBFS_ERR_DISK_FULL           0x0007 ; Disk is full
 define BBFS_ERR_EOF                 0x0008 ; End of file reached
 define BBFS_ERR_UNKNOWN             0x0009 ; An unknown error has occurred
@@ -174,104 +174,6 @@ define BBFS_ERR_INVALID             0x1003 ; Name or other parameters invalid
 
 define BBFS_TYPE_DIRECTORY 0
 define BBFS_TYPE_FILE 1
-
-; Functions
-;
-; API level 0: disk
-;
-; bbfs_drive_load(drive_num, *header)
-;   Load a BBFS_HEADER from the BBOS drive with the given number
-;
-; bbfs_drive_save(drive_num, *header)
-;   Save a BBFS_HEADER to the BBOS drive with the given number
-;
-; API level 1: header
-;
-; bbfs_header_allocate_sector(*header, sector_num)
-;   Mark the given sector in the BBFS_HEADER as allocated in the bitmap
-;
-; bbfs_header_free_sector(*header, sector_num)
-;   Mark the given sector in the BBFS_HEADER as free in the bitmap
-;
-; bbfs_header_find_free_sector(*header)
-;   Return the first free sector on the disk, or 0xFFFF if no sector is free.
-;
-; bbfs_header_format(*header)
-;   Format the given header as an empty BBFS filesystem, with no files or
-;   directories.
-;
-; API level 2: files
-;
-; bbfs_file_create(*file, *header, drive_num)
-;   Create a new file in a new free sector, using the given filesystem header
-;   and the given drive number. First sector may contain garbage. Returns an
-;   error code.
-;
-; bbfs_file_open(*file, *header, drive_num, sector_num)
-;   Open the file starting at the given sector on the given drive, using the
-;   given filesystem header, and populate the given file handle. Returns an
-;   error code.
-;
-; bbfs_file_reopen(*file)
-;   Reset back to the beginning of an opened file. Returns an error code.
-;
-; bbfs_file_flush(*file)
-;   Flush any data written to the file to disk. Responsible for updating the
-;   length of the last sector in the FAT if necessary. Returns an error code.
-;
-; bbfs_file_write(*file, *data, size)
-;   Write the given number of words, starting at the given address, to the given
-;   file, allocating new sectors as needed. Returns an error code.
-;
-; bbfs_file_read(*file, *data, size)
-;   Read the given number of words to the given address. If the end of the file
-;   is hit, words will be read up until there. Returns an error code.
-;
-; bbfs_file_seek(*file, distance)
-;   Skip ahead the given number of words in the file, allocating sectors if
-;   necessary. Returns an error code.
-;
-; bbfs_file_truncate(*file)
-;   Deallocate all sectors in the file after the current one, and make the file
-;   end at the current position. Returns an error code.
-;
-; bbfs_file_delete(*file)
-;   Deallocate all sectors in the file. Returns an error code. After calling
-;   this on a file struct, the struct must be opened again on a different
-;   starting sector.
-;
-; API Level 3: directories
-;
-; bbfs_directory_create(*directory, *header, drive_num)
-;   Make a new empty directory somewhere on the given drive, using the given;
-;   filesystem header. Returns an error code.
-;
-; bbfs_directory_open(*directory, *header, drive_num, sector_num)
-;   Open the directory at the given sector on the given drive, using the given
-;   filesystem header. Returns an error code.
-;
-; bbfs_directory_next(*directory, *entry)
-;   Populates entry with the next entry from the given directory. Returns an
-;   error code, which will be BBFS_ERR_EOF if there was no entry to get.
-;
-; bbfs_directory_append(*directory, *entry)
-;   Append the given entry to the directory. Returns an error code.
-;
-; bbfs_directory_remove(*directory, index)
-;   Delete the entry at the given index from the given directory.
-;   Returns an error code.
-;
-; bbfs_filename_pack(*unpacked, *packed)
-;   Pack a null-terminated string of 16 or fewer characters into 8 words in
-;   packed.
-;
-; bbfs_filename_unpack(*unpacked, *packed)
-;   Unpack a normal string of length 16 or less from a packed string in 8 words.
-;   Unpacked buffer must be 17 words or more, for trailing null.
-;
-; bbfs_filename_compare(*packed1, *packed2)
-;   Compare two 8-word packed filenames. Return 1 if they match, 0 otherwise.
-;   Performs case-insensitive comparison.
 
 #include "bbfs_device.asm"
 #include "bbfs_array.asm"
