@@ -1,4 +1,4 @@
-all: bbfs_test.dsk shell.dsk bbfs2_test.dsk bootloader.bin hello.bin
+all: bbfs_test.dsk shell.dsk bbfs2_test.dsk bootloader.bin hello.bin help.bin
 
 %.dsk: %.bin
 	build_bootable_floppy $< $@
@@ -16,4 +16,7 @@ bootloader.bin: bbfs_bootloader.asm
 	dasm $< $@
 
 hello.bin: hello.asm
+	dasm $< $@
+	
+help.bin: help.asm
 	dasm $< $@
