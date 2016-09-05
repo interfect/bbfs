@@ -2147,6 +2147,15 @@ shell_builtin_load:
     SET A, [A+BBFS_ARRAY_DEVICE]
     SET A, [A+BBFS_DEVICE_DRIVE]
     
+    ; Zero everyone else, for compatibility
+    SET B, 0
+    SET C, 0
+    SET X, 0
+    SET Y, 0
+    SET Z, 0
+    SET I, 0
+    set J, 0
+    
     ; Run the loaded code
     JSR 0
     
