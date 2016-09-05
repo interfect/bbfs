@@ -161,11 +161,11 @@ define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
 ; Error codes:
 
 define BBFS_ERR_NONE                0x0000 ; No error; operation succeeded
-define BBFS_ERR_DRIVE               0x0005 ; Drive is incorrect or not working
-define BBFS_ERR_DISK_FULL           0x0007 ; The disk is full
-define BBFS_ERR_EOF                 0x0008
-define BBFS_ERR_UNKNOWN             0x0009
-define BBFS_ERR_UNFORMATTED         0x000A
+define BBFS_ERR_DRIVE               0x0005 ; Drive number is invalid
+define BBFS_ERR_DISK_FULL           0x0007 ; Disk is full
+define BBFS_ERR_EOF                 0x0008 ; End of file reached
+define BBFS_ERR_UNKNOWN             0x0009 ; An unknown error has occurred
+define BBFS_ERR_UNFORMATTED         0x000A ; Disk is not BBFS-formatted
 define BBFS_ERR_NOTDIR              0x1001 ; Directory file wasn't a directory
 define BBFS_ERR_NOTFOUND            0x1002 ; No file at given sector/name 
 define BBFS_ERR_INVALID             0x1003 ; Name or other parameters invalid
