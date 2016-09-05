@@ -75,15 +75,6 @@
 ; a normal file.
 ;
 
-; Configuration:
-
-; How big of sectors do we support
-define BBFS_MAX_SECTOR_SIZE 512
-; And how many? We need a sentinel value for "no sector"
-define BBFS_MAX_SECTOR_COUNT 0xFFFF
-; Where should the volume info live? Sector(s) before this are bootloader
-define BBFS_START_SECTOR 1
-
 ; BBOS dependency:
 
 #include "bbos.inc.asm"
@@ -102,7 +93,16 @@ define WRITE_DRIVE_SECTOR 0x2004
 ; States and errors are in bbos.inc.asm
 ; Drive param struct stuff is also there
 
-; Structures:
+; Parameters:
+
+define BBFS_VERSION 0xBF56 ; This is the filesystem spec version
+define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
+define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
+define BBFS_MAX_SECTOR_SIZE 512 ; Support sectors of this size or smaller
+define BBFS_MAX_SECTOR_COUNT 0xFFFF ; Support up to this number of sectors
+define BBFS_START_SECTOR 1 ; This is the header start sector, after a bootloader
+
+; In-Memory Structures:
 
 ; BBFS_DEVICE: sector cache with eviction.
 ; on.
@@ -125,14 +125,6 @@ define BBFS_VOLUME_FREEMASK_START BBFS_ARRAY_SIZEOF ; Offset in the array where 
 define BBFS_VOLUME_FAT_START BBFS_VOLUME_FREEMASK_START + 1 ; Offset in the array where the FAT starts
 define BBFS_VOLUME_FIRST_USABLE_SECTOR BBFS_VOLUME_FAT_START + 1 ; Number of the first usable sector (not used in the array)
 
-; What's in a BBFS filesystem header on disk?
-; Only the version location and freemask start are predicatble
-; BBFS_HEADER: struct for the 3-sector header including bitmap and FAT
-define BBFS_HEADER_SIZEOF 1536
-define BBFS_HEADER_VERSION 0
-define BBFS_HEADER_FREEMASK 6
-define BBFS_HEADER_FAT 96
-
 ; BFFS_FILE: file handle structure
 ; Now all the cacheing is done by the device.
 define BBFS_FILE_SIZEOF 5
@@ -141,6 +133,19 @@ define BBFS_FILE_START_SECTOR 1 ; Sector that the file starts at
 define BBFS_FILE_SECTOR 2 ; Sector currently being read/written
 define BBFS_FILE_OFFSET 3 ; Offset in the sector at which to read/write next
 define BBFS_FILE_MAX_OFFSET 4 ; Number of used words in the sector
+
+; BBFS_DIRECTORY: handle for an open directory (which contains a file handle)
+define BBFS_DIRECTORY_SIZEOF 1+BBFS_FILE_SIZEOF
+define BBFS_DIRECTORY_CHILDREN_LEFT 0
+define BBFS_DIRECTORY_FILE 1
+
+; On-Disk Structures:
+
+; BBFS_HEADER: filesystem header structure on disk
+define BBFS_HEADER_VERSION 0
+define BBFS_HEADER_FREEMASK 6
+; Only the version location and freemask start are predicatble
+; Other field positions (and total size) depend on sector count.
 
 ; BBFS_DIRHEADER: directory header structure
 define BBFS_DIRHEADER_SIZEOF 2
@@ -153,24 +158,11 @@ define BBFS_DIRENTRY_TYPE 0
 define BBFS_DIRENTRY_SECTOR 1
 define BBFS_DIRENTRY_NAME 2 ; Stores 8 words of 16 packed characters
 
-; BBFS_DIRECTORY: handle for an open directory (which contains a file handle)
-define BBFS_DIRECTORY_SIZEOF 1+BBFS_FILE_SIZEOF
-define BBFS_DIRECTORY_CHILDREN_LEFT 0
-define BBFS_DIRECTORY_FILE 1
+; Error codes:
 
-; Parameters
-
-define BBFS_VERSION 0xBF56
-define BBFS_SECTORS 1440
-define BBFS_WORDS_PER_SECTOR 512
-define BBFS_SECTOR_WORDS 90 ; Words for one sector per bit
-define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
-define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
-
-; Error codes
-define BBFS_ERR_NONE                0x0000
-define BBFS_ERR_DRIVE               0x0005
-define BBFS_ERR_DISC_FULL           0x0007
+define BBFS_ERR_NONE                0x0000 ; No error; operation succeeded
+define BBFS_ERR_DRIVE               0x0005 ; Drive is incorrect or not working
+define BBFS_ERR_DISK_FULL           0x0007 ; The disk is full
 define BBFS_ERR_EOF                 0x0008
 define BBFS_ERR_UNKNOWN             0x0009
 define BBFS_ERR_UNFORMATTED         0x000A
@@ -178,12 +170,10 @@ define BBFS_ERR_NOTDIR              0x1001 ; Directory file wasn't a directory
 define BBFS_ERR_NOTFOUND            0x1002 ; No file at given sector/name 
 define BBFS_ERR_INVALID             0x1003 ; Name or other parameters invalid
 
-; Directory constants
+; Directory constants:
+
 define BBFS_TYPE_DIRECTORY 0
 define BBFS_TYPE_FILE 1
-
-; What sector is the root directory always in?
-define BBFS_ROOT_DIRECTORY 4
 
 ; Functions
 ;
@@ -286,12 +276,5 @@ define BBFS_ROOT_DIRECTORY 4
 #include "bbfs_device.asm"
 #include "bbfs_array.asm"
 #include "bbfs_volume.asm"
-#include "bbfs_header.asm"
 #include "bbfs_files.asm"
 #include "bbfs_directories.asm"
-
-
-; Implementation
-
-
-

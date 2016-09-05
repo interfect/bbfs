@@ -38,13 +38,9 @@ define ASCII_MAX 0x7f ; ASCII del character, not used itself.
 ; How long can a shell command line be? This includes the trailing null.
 define SHELL_COMMAND_LINE_LENGTH 128
 
-; How long can a command be, including a trailing null? Max file name length
-; minus extension.
+; How long can a command binary name be, including a trailing null? Max file
+; name length minus extension.
 define SHELL_COMMAND_LENGTH 13
-
-; Where is the root directory on a BBFS disk? TODO: restructure bbfs includes to
-; make it so we can just use the bbfs defines.
-define BBFS_ROOT_DIRECTORY 4
 
 ; What's the BBOS bootloader magic number?
 define BBOS_BOOTLOADER_MAGIC 0x55AA
@@ -55,7 +51,8 @@ define BBOS_BOOTLOADER_MAGIC_POSITION 511
 ; to overwrite the routines trying to load it.
 
 ; BBOS likes to load at 0xF000. If we could relocate ourselves, we could just
-; ask it where to load.
+; ask it where to load. Unfortunately, we can't, so we just load at a fixed
+; offset.
 
 ; This leaves us 12k for code above, and 40k for user/loaded code below.
 define SHELL_CODE_START 0xA000 
@@ -71,7 +68,7 @@ zero:
     SET I, moveable_start ; This is where we find the code to move
     SET J, start ; This is where it goes
     ; Calculate (at assembly time) how many words to copy
-    SET C, bootloader_code+BBFS_WORDS_PER_SECTOR-start
+    SET C, bootloader_code+BBFS_MAX_SECTOR_SIZE-start
     
 .copy_loop:
     ; Copy all the words up into higher memory
@@ -919,7 +916,7 @@ shell_builtin_format:
     ; Write the actual program code
     SET PUSH, file ; Arg 1: file pointer to write to
     SET PUSH, start ; Arg 2: start address
-    SET PUSH, bootloader_code+BBFS_WORDS_PER_SECTOR-start ; Arg 3: length
+    SET PUSH, bootloader_code+BBFS_MAX_SECTOR_SIZE-start ; Arg 3: length
     JSR bbfs_file_write
     SET A, POP
     ADD SP, 2
@@ -2113,7 +2110,7 @@ shell_builtin_load:
     ; success when hitting the EOF, we can just read in big chunks.
     SET PUSH, file ; Arg 1: file
     SET PUSH, B ; Arg 2: buffer
-    SET PUSH, BBFS_WORDS_PER_SECTOR ; Arg 3: length
+    SET PUSH, BBFS_MAX_SECTOR_SIZE ; Arg 3: length
     JSR bbfs_file_read
     SET A, POP ; Read error code
     SET C, POP ; Read words read
@@ -2126,7 +2123,7 @@ shell_builtin_load:
         SET PC, .error_A
         
     ; If we get here, we succeeded but there's more to do.
-    ADD B, BBFS_WORDS_PER_SECTOR ; Write after what we just loaded
+    ADD B, BBFS_MAX_SECTOR_SIZE ; Write after what we just loaded
     SET PC, .load_loop
         
 .load_done:

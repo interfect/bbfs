@@ -53,7 +53,7 @@ bbfs_file_create:
     
 .error:
     ; The generic error we can have is a full disk
-    SET [Z], BBFS_ERR_DISC_FULL
+    SET [Z], BBFS_ERR_DISK_FULL
     SET PC, .return
 .error_b:
     SET [Z], B
@@ -480,7 +480,7 @@ bbfs_file_write:
     
 .error_space:
     ; Return the out of space error
-    SET [Z], BBFS_ERR_DISC_FULL
+    SET [Z], BBFS_ERR_DISK_FULL
     SET PC, .return
     
 .error_drive:
@@ -850,7 +850,7 @@ bbfs_file_seek:
     
 .error_space:
     ; Return the out of space error
-    SET [Z], BBFS_ERR_DISC_FULL
+    SET [Z], BBFS_ERR_DISK_FULL
 
 .return:
     SET Y, POP
