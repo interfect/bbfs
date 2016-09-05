@@ -436,10 +436,10 @@ bbfs_directory_remove:
     ; header)
     SET PUSH, A ; Arg 1: file to seek in
     ADD [SP], BBFS_DIRECTORY_FILE
-    ; Arg 2: words to seek (entry count * entry size - 1 + header)
+    ; Arg 2: words to seek (entry count * new entry size + header)
     SET PUSH, [X+BBFS_DIRHEADER_CHILD_COUNT] 
     MUL [SP], BBFS_DIRENTRY_SIZEOF
-    ADD [SP], BBFS_DIRHEADER_SIZEOF - 1
+    ADD [SP], BBFS_DIRHEADER_SIZEOF
     JSR bbfs_file_seek
     SET [Z], POP
     ADD SP, 1
