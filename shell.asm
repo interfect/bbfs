@@ -150,7 +150,7 @@ command_loop:
 ;   If ignore_case is 1, then case is ignored.
 ; shell_exec(*command, drive_number)
 ;   Try executing the command in the given buffer, by first going through
-;   builtins and then out to the given disk for .COM files.
+;   builtins and then out to the given disk for files with executable extension.
 ; shell_open(*file, *filename, create)
 ;   Populate a file object by opening the given file object on the appropriate
 ;   drive (either the current one or one derived from a leading A:\ in the
@@ -491,8 +491,9 @@ shell_strncmp:
     SET PC, POP
     
 ; shell_exec(*command, drive_number)
-; Try the command at the start of the buffer as a builtin, then as a .COM on the
-; given disk.
+; Try the command at the start of the buffer as a builtin, then as a file with
+; executable extension on the given disk, then as a file with the executable
+; extension appended.
 ; [Z+1]: command string buffer
 ; [Z]: drive number to search
 shell_exec:
@@ -630,26 +631,63 @@ shell_exec:
     ADD A, 1
     SET PC, .command_length_loop
 .command_length_done:
-    SUB A, [Z+1]
+    SUB A, [Z+1] ; Now A is the command length
     
     IFN B, 0
         ; We found an extension in the string.
         SET PC, .try_load_with_extension
     
-    ; TODO: try appending an extension and loading with that.
+    ; Otherwise, try adding it on and running that. Filenames are 16 chars, so
+    ; we need 12 or fewer for this to work.
+    IFL A, 13
+        SET PC, .try_load_without_extension
+        
     SET PC, .error_bad_command
+        
+; Try loading the command, appending an executable extension
+.try_load_without_extension:
+    ; Copy the filename over to our global filename buffer
+    SET A, [Z+1]
+    SET B, filename
+.buffer_loop:
+    SET [B], [A]
+    IFE [A], 0
+        SET PC, .buffer_loop_done
+    ADD A, 1
+    ADD B, 1
+    SET PC, .buffer_loop
+.buffer_loop_done:
+    ; Append the executable extension
+    SET A, str_executable_extension
+.ext_loop:
+    SET [B], [A]
+    IFE [A], 0
+        SET PC, .ext_loop_done
+    ADD A, 1
+    ADD B, 1
+    SET PC, .ext_loop
+.ext_loop_done:
+    ; Load it
+    SET PUSH, filename ; Arg 1: filename string
+    JSR shell_builtin_load
+    SET Y, POP
+    
+    IFE Y, 0
+        ; We didn't load successfully
+        SET PC, .error_bad_command
+    
+    ; Otherwise it ran
+    SET PC, .return
     
 .try_load_with_extension:
     ; A is the filename length and B is the extension start
     ; See if the extension is executable and if so load from disk.
     
-    ; TODO: This doesn't work yet! Make this work!
-    
-    ; Do we have the .img extension?
-    SET PUSH, str_img_extension ; Arg 1: string 1
+    ; Do we have the executable extension?
+    SET PUSH, str_executable_extension ; Arg 1: string 1
     SET PUSH, B ; Arg 2: string 2
     SET PUSH, 1 ; Arg 3: ignore case
-    SET PUSH, 4 ; Arg 4: number of characters (".IMG")
+    SET PUSH, 4 ; Arg 4: number of characters (".EXT")
     JSR shell_strncmp
     SET Y, POP
     ADD SP, 3
@@ -2139,6 +2177,9 @@ shell_builtin_load:
     ; We did not successfuly load the file
     SET [Z], 0
     
+    ; TODO: split out the actual loading code from the builtin, so we don't see
+    ; this message whenever a binary can't be loaded for a bogus command
+    
     SET PUSH, str_load_fail ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
     SET A, WRITE_STRING
@@ -2553,11 +2594,11 @@ halt:
 
 ; Strings
 str_ready:
-    .asciiz "DC-DOS 1.2 Ready"
+    .asciiz "DC-DOS 2.0 Ready"
 str_prompt:
     .asciiz ":\> "
 str_ver_version1:
-    .asciiz "DC-DOS Command Interpreter 1.3"
+    .asciiz "DC-DOS Command Interpreter 2.0"
 str_ver_version2:
     .asciiz "Copyright (C) UBM Corporation"
 str_not_found:
@@ -2607,8 +2648,8 @@ str_del_deleted:
 str_load_usage:
     .asciiz "Usage: LOAD <FILE>"
 str_load_fail:
-    .asciiz "Failed"
-str_img_extension: ; IMG binaries load at 0
+    .asciiz "Load failed"
+str_executable_extension: ; IMG binaries load at 0
     .asciiz ".IMG"
 str_com_extension: ; COM binaries will be a bit smarter probably.
     .asciiz ".COM"
