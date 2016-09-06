@@ -121,7 +121,8 @@ bbfs_directory_open:
     
     ; Make sure we opened a directory
     IFN [C+BBFS_DIRHEADER_VERSION], BBFS_VERSION
-        SET PC, .error_notdir
+        IFN [C+BBFS_DIRHEADER_VERSION], BBFS_COMPAT_VERSION
+            SET PC, .error_notdir
         
     ; Fill in the number of remaining entries
     SET [A+BBFS_DIRECTORY_CHILDREN_LEFT], [C+BBFS_DIRHEADER_CHILD_COUNT]

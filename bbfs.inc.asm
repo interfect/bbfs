@@ -17,7 +17,8 @@ define WRITE_DRIVE_SECTOR 0x2004
 
 ; Parameters:
 
-define BBFS_VERSION 0xBF56 ; This is the filesystem spec version
+define BBFS_VERSION 0xBF55 ; This is the filesystem spec version (=bfs512)
+define BBFS_COMPAT_VERSION 0xBF56 ; This version is also compatible
 define BBFS_FILENAME_BUFSIZE 17 ; Characters plus trailing null
 define BBFS_FILENAME_PACKED 8 ; Packed 2 per word internally
 define BBFS_MAX_SECTOR_SIZE 512 ; Support sectors of this size or smaller

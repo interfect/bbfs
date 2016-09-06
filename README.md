@@ -1,11 +1,19 @@
 # BBFS
 BBFS is a filesystem specification and implementation for virtual computers.
 
-The targeted computers are DCPU-based systems running [BBOS](https://github.com/MadMockers/BareBonesOS).
+The targeted computers are DCPU-based systems running [BBOS](https://github.com/MadMockers/BareBonesOS), and having either M35FD floppy drives or M525HD hard disks.
 
 # About BBFS
 
-BBFS stands for "Bootable Bfs512 File System". The filesystem is a more-or-less straight reimplementation of [bfs512](https://github.com/Blecki/DCPUB/blob/master/Binaries/bfs512.dc) from the [DCPUB project](https://github.com/Blecki/DCPUB), but with all the filesystem tables shifted down on the disk by one sector, to make room for a bootloader at sector 0.
+BBFS stands for "Bootable Bfs512 File System". The filesystem is a more-or-less straight reimplementation of [bfs512](https://github.com/Blecki/DCPUB/blob/master/Binaries/techcompliant/bfs512.b) from the [DCPUB project](https://github.com/Blecki/DCPUB). Originally it differed from bfs512 by supporting a boot sector at sector 0; however, bfs512 added a boot sector and now the two implementations are compatible on M35FD disks.
+
+# DC-DOS Shell
+
+This repository contains a simple shell, in `shell.asm`, which supports formatting BBFS volumes and creating, deleting, and accessing files on them. The shell can load and execute a file, allowing you to keep your programs as files on disk and run them on demand.
+
+Executables are stored in `.IMG` files, which are loaded at address 0 and executed from there. On execution, the A register holds the BBOS drive number from which the program was loaded, as it does when BBOS loads a bootloader or when the bootloader loads `BOOT.IMG`. The stack is preserved, so if the loaded program does not corrupt the shell's code (which lives at 0xA000 and above), it can `SET PC, POP` to return control back to the shell.
+
+This binary foirmat has been designed for maximum compatibility; it can load programs which don't know anything about the shell, BBFS, or even BBOS, as long as they are designed to execute from address 0 (and as long as they can re-map VRAM from where BBOS keeps it, if applicable). Unfortunately, it does not yet support command-line argument passing.
 
 # Bootloaders
 
@@ -15,9 +23,9 @@ The repository also includes a test/example program, `bbfs_test.asm`, which can 
 
 # BBFS Design
 
-The design of BBFS is mostly documented in `bbfs.asm`, which gives layouts for all major data structures and descriptions of all the API functions.
+The design of BBFS is mostly documented in `bbfs.asm`, which gives layouts for all major data structures.
 
-Here is the basic structure of a BBFS disk:
+Here is the basic structure of a BBFS M535FD disk:
 ```
 ; Disk structure:
 ;
@@ -25,7 +33,7 @@ Here is the basic structure of a BBFS disk:
 ; Sector 0      | Bootloader                    |
 ; --------------+------------+------------------+
 ; Sector 1      | FS header  | Version          |
-;               |            | (1 word, 0xBF56) |
+;               |            | (1 word)         |
 ;               |            +------------------+
 ;               |            | Reserved         |
 ;               |            | (5 words)        |
@@ -55,15 +63,19 @@ Since a file may not incluse all of its last sector, the last entry in the FAT f
 
 # BBFS API
 
-All API functions are called using the same calling convention as BBOS calls: push the arguments to the stack, first argument first, call the function, and then remove all the arguments you pushed from the stack. If a return value is supplied, it overwrites the final argument (so it can be popped first).
+All API functions are called using the same calling convention as BBOS calls: push the arguments to the stack, first argument first, call the function, and then remove all the arguments you pushed from the stack. If a return value is supplied, it overwrites the final argument (so it can be popped first). Some functions have multiple return values, which are popped in order.
 
 The API is devided into levels:
 
-* Level 0: Filesystem header functions (read and write FAT, allocate sectors, format a disk)
+* Level 0: `bbfs_device.asm`: Device functions, implementing a sector-level cache on top of BBOS drives.
 
-* Level 1: File functions (read and write, seek and reopen, truncate, create, open, and delete)
+* Level 1: `bbfs_array.asm`: The disk-backed word array used to implement the FAT, free bitmap, and filesystem header.
 
-* Level 2: Directory functions (create, open, get next entry, remove entry at index)
+* Level 2: `bbfs_volume.asm`: Functions for working with a volume's FAT, free bitmap and filesystem header.
+
+* Level 3: `bbfs_files.asm`: File functions (read and write, seek and reopen, truncate, create, open, and delete)
+
+* Level 4: `bbfs_directories.asm`: Directory functions (create, open, get next entry, remove entry at index)
 
 Each layer is implemented on top of the layer below it. In particular,
 directories are just files that store the names and defining sector numbers of

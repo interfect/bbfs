@@ -180,8 +180,6 @@ found_bl:
 MUL A, BBFS_DIRENTRY_SIZEOF
 ADD A, BBFS_DIRHEADER_SIZEOF+BBFS_DIRENTRY_SECTOR
 
-SET [0xAAAA], 0xAAAA
-
 ; Read all from that sector into memory
 SET PUSH, [A] ; Arg 1: sector to start at
 JSR read_to_address_0_bl

@@ -91,8 +91,9 @@ bbfs_volume_open:
     SET [Z], BBFS_ERR_NONE
         
     IFN C, BBFS_VERSION
-        ; This doesn't look like a formatted disk
-        SET [Z], BBFS_ERR_UNFORMATTED
+        IFN C, BBFS_COMPAT_VERSION
+            ; This doesn't look like a formatted disk
+            SET [Z], BBFS_ERR_UNFORMATTED
         
     SET PC, .return
     
