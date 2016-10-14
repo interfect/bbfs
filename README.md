@@ -13,7 +13,13 @@ This repository contains a simple shell, in `shell.asm`, which supports formatti
 
 Executables are stored in `.IMG` files, which are loaded at address 0 and executed from there. On execution, the A register holds the BBOS drive number from which the program was loaded, as it does when BBOS loads a bootloader or when the bootloader loads `BOOT.IMG`. The stack is preserved, so if the loaded program does not corrupt the shell's code (which lives at 0xA000 and above), it can `SET PC, POP` to return control back to the shell.
 
-This binary foirmat has been designed for maximum compatibility; it can load programs which don't know anything about the shell, BBFS, or even BBOS, as long as they are designed to execute from address 0 (and as long as they can re-map VRAM from where BBOS keeps it, if applicable). Unfortunately, it does not yet support command-line argument passing.
+This binary format has been designed for maximum compatibility; it can load programs which don't know anything about the shell, BBFS, or even BBOS, as long as they are designed to execute from address 0 (and as long as they can re-map VRAM from where BBOS keeps it, if applicable). Unfortunately, it does not yet support command-line argument passing.
+
+## Using the Shell
+
+Tyhe shell supports commands like `DIR`, `COPY`, `DEL`, and `FORMAT`. It uses DOS-style drive letters assigned A-H to the BBOS drives, in numerical order; you can change to a drive by typing its letter.
+
+To get a program you can load (besides Admiral), get your program onto a disk *without* a bootloader in front, and use `IMAGE <drive letter> <program>.IMG` to save an image of the disk in the specified drive to the specified file on your current disk. Then type `LOAD <program>.IMG` or just `<program>` to load it up.
 
 # Bootloaders
 
