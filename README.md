@@ -17,7 +17,7 @@ This binary format has been designed for maximum compatibility; it can load prog
 
 ## Using the Shell
 
-Tyhe shell supports commands like `DIR`, `COPY`, `DEL`, and `FORMAT`. It uses DOS-style drive letters assigned A-H to the BBOS drives, in numerical order; you can change to a drive by typing its letter.
+The shell supports commands like `DIR`, `COPY`, `DEL`, and `FORMAT`. It uses DOS-style drive letters assigned A-H to the BBOS drives, in numerical order; you can change to a drive by typing its letter.
 
 To get a program you can load (besides Admiral), get your program onto a disk *without* a bootloader in front, and use `IMAGE <drive letter> <program>.IMG` to save an image of the disk in the specified drive to the specified file on your current disk. Then type `LOAD <program>.IMG` or just `<program>` to load it up.
 
