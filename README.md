@@ -13,7 +13,33 @@ This repository contains a simple shell, in `shell.asm`, which supports formatti
 
 Executables are stored in `.IMG` files, which are loaded at address 0 and executed from there. On execution, the A register holds the BBOS drive number from which the program was loaded, as it does when BBOS loads a bootloader or when the bootloader loads `BOOT.IMG`. The stack is preserved, so if the loaded program does not corrupt the shell's code (which lives at 0xA000 and above), it can `SET PC, POP` to return control back to the shell.
 
-This binary format has been designed for maximum compatibility; it can load programs which don't know anything about the shell, BBFS, or even BBOS, as long as they are designed to execute from address 0 (and as long as they can re-map VRAM from where BBOS keeps it, if applicable). Unfortunately, it does not yet support command-line argument passing.
+This binary format has been designed for maximum compatibility; it can load programs which don't know anything about the shell, BBFS, or even BBOS, as long as they are designed to execute from address 0 (and as long as they can re-map VRAM from where BBOS keeps it, if applicable).
+
+DC-DOS-aweare programs can use an interrupt-driven API similar to BBOS's API, which is documented in [dcdos_api.inc.asm](dcdos_api.inc.asm). The major available functions are:
+
+```
+;FUNCTION TABLE
+;==============
+;Name                  A       Args                         Returns
+;-------------------------------------------------------------------------------
+;-- Applications
+; DCDOS_HANDLER_GET     0x0001  OUT handler_addr            handler_addr
+; DCDOS_ARGS_GET        0x0001  OUT *args                   *args
+;
+;-- High-level filesystem functions:
+; DCDOS_SHELL_OPEN      0x1000  *file, *filename, create    error
+;
+;-- Files
+; DCDOS_FILE_READ       0x2001  *file, *data, size          error, words read
+; DCDOS_FILE_WRITE      0x2002  *file, *data, size          error
+; DCDOS_FILE_FLUSH      0x2003  *file                       error
+; DCDOS_FILE_REOPEN     0x2004  *file                       error
+; DCDOS_FILE_SEEK       0x2005  *file, distance             error
+; DCDOS_FILE_TRUNCATE   0x2006  *file                       error
+```
+
+An example of such a program is provided in [echo.asm](echo.asm).
+
 
 ## Using the Shell
 
