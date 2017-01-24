@@ -1,5 +1,7 @@
 ; shell.asm: command shell for loading commands off of a BBFS disk.
 
+#include <dcdos_api.inc.asm>
+
 ; BBOS functions
 ;Set Cursor Pos          0x1001  X, Y                    None            1.0
 ;Get Cursor Pos          0x1002  OUT X, OUT Y            Y, X            1.0
@@ -19,6 +21,15 @@ define READ_CHARACTER   0x3001
 ; Check Drive Status      0x2001  DriveNum                StatusCode      1.0
 define GET_DRIVE_COUNT 0x2000
 define CHECK_DRIVE_STATUS 0x2001
+
+; Get BBOS info
+define GET_BBOS_INFO    0x0000
+; And the offsets to varoious fields
+define BBOS_INFO_VERSION        0
+define BBOS_INFO_START_ADDR     1
+define BBOS_INFO_END_ADDR       2
+define BBOS_INFO_INT_HANDLER    3
+define BBOS_INFO_API_HANDLER    4
 
 ; Drive status codes
 define STATE_NO_MEDIA 0
@@ -105,6 +116,18 @@ start:
     ; The drive we loaded off of is in A.
     SET [drive], A
     
+    ; Configure our interrupt handler. See
+    ; <https://github.com/MadMockers/BareBonesOS>
+    SET A, GET_BBOS_INFO    ; Get BBOS Info
+    SUB SP, 1               ; placeholder for return value
+    INT BBOS_IRQ_MAGIC      ; invoke BBOS
+    SET A, POP              ; pop address of info struct into A
+    
+    ; update global bbos_int_addr with the value from the struct
+    SET [bbos_int_addr], [A+BBOS_INT_HANDLER]
+
+    IAS dcdos_interrupt_handler ; Set system interrupt handler
+
      ; Print the intro
     SET PUSH, str_ready ; Arg 1: string to print
     SET PUSH, 1 ; Arg 2: whether to print a newline
@@ -535,6 +558,10 @@ shell_exec:
 .args_done:
     ; Now [Z+1] is the null-terminated command name, and X points to the null-
     ; terminated argument string.
+    
+    ; Save the argument string in case we end up calling a program and it wants
+    ; to get it through the interrupt API
+    SET [arguments_start], X
     
     ; Skip empty commands
     SET A, [Z+1]
@@ -2591,6 +2618,45 @@ shell_builtin_image:
     SET Z, POP
     SET PC, POP
     
+; Handle all the DCDOS interrupts
+dcdos_interrupt_handler:
+    ; If this isn't a DCDOS interrupt, pass it to BBOS instead
+    IFN A, DCDOS_IRQ_MAGIC
+        SET PC, [bbos_int_addr]
+    
+    ; Otherwise handle it here.
+    
+    ; Fiddle with the stack and interrupt state so we are like we were before
+    ; the interrupt.
+    SET A, POP
+    SET [dcdos_interrupt_ret_addr], POP
+    IAQ 0
+    
+    ; A couple of commands can be handled in just one instruction
+    IFE A, DCDOS_HANDLER_GET
+        SET [SP], dcdos_interrupt_handler
+    IFE A, DCDOS_ARGS_GET
+        SET [SP], [arguments_start]
+    ; The rest just call the appropriate function, with the args already on the
+    ; stack.
+    IFE A, DCDOS_SHELL_OPEN
+        JSR shell_open
+    IFE A, DCDOS_FILE_READ
+        JSR bbfs_file_read
+    IFE A, DCDOS_FILE_WRITE
+        JSR bbfs_file_write
+    IFE A, DCDOS_FILE_FLUSH
+        JSR bbfs_file_flush
+    IFE A, DCDOS_FILE_REOPEN
+        JSR bbfs_file_reopen
+    IFE A, DCDOS_FILE_SEEK
+        JSR bbfs_file_seek
+    IFE A, DCDOS_FILE_TRUNCATE
+        JSR bbfs_file_truncate
+    
+    ; Jump from the handler back to the calling code. All registers are intact.
+    SET PC, [dcdos_interrupt_ret_addr]
+    
 halt:
     ; We can jump here for debugging
     SET PC, halt
@@ -2600,11 +2666,11 @@ halt:
 
 ; Strings
 str_ready:
-    .asciiz "DC-DOS 2.0 Ready"
+    .asciiz "DC-DOS 3.0 Ready"
 str_prompt:
     .asciiz ":\> "
 str_ver_version1:
-    .asciiz "DC-DOS Command Interpreter 2.0"
+    .asciiz "DC-DOS Command Interpreter 3.0"
 str_ver_version2:
     .asciiz "Copyright (C) UBM Corporation"
 str_not_found:
@@ -2721,6 +2787,13 @@ bootloader_code:
 .org SHELL_DATA_START
 
 ; Global vars
+; Address of the original BBOS interrupt handler
+bbos_int_addr:
+    .reserve 1
+; Interrupts into DCDOS aren't reentrant, so we can fill this in and use it when
+; returning.
+dcdos_interrupt_ret_addr:
+    .reserve 1
 ; Current drive number
 drive:
     .reserve 1
@@ -2741,6 +2814,9 @@ entry:
 ; String buffer for commands
 command_buffer:
     .reserve SHELL_COMMAND_LINE_LENGTH
+; Pointer to arguments string (which will be somewhere in the above buffer)
+arguments_start:
+    .reserve 1
 ; Packed filename for looking through directories
 packed_filename:
     .reserve BBFS_FILENAME_PACKED

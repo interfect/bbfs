@@ -3,7 +3,7 @@
 ; Build into a bare assembled binary
 ; Pretend it's a disk image and load it into your emulator
 ; Image it to a file in BBFS
-; load it with the LOAD command
+; load it by typing its name
 
 ; TODO: need a way to make the build system dump this into a BBFS image, or to
 ; automate those actions.
@@ -92,7 +92,7 @@ str_help05: .asciiz "                                "
 str_help06: .asciiz "Additional commands can be      "
 str_help07: .asciiz "loaded from .IMG files on disk. "
 str_help08: .asciiz "Images are loaded at address 0. "
-str_help09: .asciiz "Use 'image B file.img' to image "
+str_help09: .asciiz "Use 'image B FILE.IMG' to image "
 str_help10: .asciiz "the disk in drive B for loading."
 
 ; Terminate with at least a sector of zeroes so the imager knows to stop imaging

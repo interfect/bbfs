@@ -138,7 +138,7 @@ bbfs_file_open:
 ; bbfs_file_reopen(*file)
 ; Reset back to the beginning of the file. Returns an error code.
 ; [Z]: BBFS_FILE to reopen
-; Returns: error code on [Z]
+; Returns: error code in [Z]
 bbfs_file_reopen:
     ; Set up frame pointer
     SET PUSH, Z
@@ -193,7 +193,7 @@ bbfs_file_reopen:
     
 ; bbfs_file_flush(*file)
 ; Flush the data in the currently buffered sector to disk. Returns an error
-; code.
+; code. After flushing, no close operation is necessary.
 ; [Z]: BBFS_FILE to flush
 ; Returns: error code in [Z]
 bbfs_file_flush:
