@@ -180,6 +180,9 @@ command_loop:
 ;   index in the global directory if found.
 ; shell_resolve_drive(character)
 ;   Turn a drive letter into a drive number, or 0xFFFF if a bad drive letter.
+; shell_atoi(*string)
+;   Return the decimal number represented by the given string, or 0 if the
+;   string is empty or unparseable.
 
 ; Builtin functions (shell commands)
 ;
@@ -212,8 +215,8 @@ command_loop:
 ; shell_builtin_image(*arguments)
 ;   Images the disk in the drive given as the first argument to the file named
 ;   with the second argument. Filenames may be prefixed as <DRIVE>:\. Saves
-;   complete sectors of the disk, until a sector of all 0s is encountered or the
-;   entire disk is imaged.
+;   complete sectors of the disk, until a sector of all 0s is encountered.
+;   Can take an optional sector count argument instead.
 
 ; shell_readline(*buffer, length)
 ; Read a line into a buffer.
@@ -2055,6 +2058,63 @@ shell_resolve_drive:
     SET Z, POP
     SET PC, POP
     
+; shell_atoi(*string)
+; Return the decimal parse of the given null-terminated string, or 0 if the
+; string cannot be parsed.
+; [Z]: null-terminated string
+; Returns: parsed decimal value in [Z]
+
+shell_atoi:
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Parsed value
+    SET PUSH, B ; Cursor
+    
+    ; Start at the first character
+    SET B, [Z]
+    
+    ; Start with 0 as our value so far
+    SET A, 0
+    
+.loop:
+    IFE [B], 0
+        ; Null terminator. Return.
+        SET PC, .return
+        
+    IFL [B], 0x30 ; '0'
+        ; Too small to be a digit
+        SET PC, .return
+        
+    IFG [B], 0x39 ; '9'
+        SET PC, .return
+        
+    ; Scale what we have by 10 since there's another digit
+    MUL A, 10
+    
+    ; Knock the digit base value off the character we have
+    SUB [B], 0x30 ; '0'
+    
+    ; Add in the numerical value that's left
+    ADD A, [B]
+    
+    ; Look at the next character
+    ADD B, 1
+    
+    SET PC, .loop
+    
+.return:
+    SET [Z], A    
+    
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+
+    
 ; shell_builtin_load(*arguments)
 ; Load the file specified at address 0, and JSR there. Returns 1 if it ever
 ; returns, and 0 if it could not be loaded.
@@ -2242,6 +2302,7 @@ shell_builtin_image:
     SET PUSH, X ; Sector being read
     SET PUSH, Y ; Scratch for iterating through sector
     SET PUSH, I ; Device sector size
+    SET PUSH, J ; Remaining sectors we need to load due to our argument
     
     ; Parse the command line
     ; Split out the drive letter
@@ -2311,7 +2372,7 @@ shell_builtin_image:
 .parse_spaces_loop:
     IFE [C], 0 ; No second filename
         SET PC, .error_usage
-    IFN [C], 0x20 ; Found a space
+    IFN [C], 0x20 ; Found a non-space
         SET PC, .parse_spaces_done
         
     ; Try the next character
@@ -2336,8 +2397,40 @@ shell_builtin_image:
     SET PC, .parse_second_filename_loop
     
 .parse_second_filename_done:
-    ; Zero out this character, which may be a space
+    
+    ; If we already have a 0 here, then there's no 3rd argument. So we can leave
+    ; A here and parse the null string and get a 0 sector count
+    IFE [A], 0
+        SET PC, .parse_more_spaces_done
+    
+    ; Zero out this character, which may be a space, so the filename string is
+    ; terminated
     SET [A], 0
+    ; And skip it
+    ADD A, 1
+
+    ; Now we want to look for an optional third argument of sector count
+    
+    ; Slide over all spaces
+.parse_more_spaces_loop:
+    IFE [A], 0 ; No third argument (null string)
+        SET PC, .parse_more_spaces_done
+    IFN [A], 0x20 ; Found a non-space
+        SET PC, .parse_more_spaces_done
+        
+    ; Try the next character
+    ADD A, 1
+    SET PC, .parse_more_spaces_loop
+    
+.parse_more_spaces_done:
+    ; Either [A] is 0 or it is the first character of the third, optional
+    ; argument
+    
+    ; Parse the argument and get either a number or 0 if there's no valid
+    ; argument.
+    SET PUSH, A
+    JSR shell_atoi
+    SET J, POP
     
     ; We have now parsed our arguments
     
@@ -2419,6 +2512,14 @@ shell_builtin_image:
     ; If we can't read the sector, something is wrong
     IFE A, 0x0000
         SET PC, .error_unknown
+        
+    ; We read the sector. Do we have any more sectors we must read?
+    IFN J, 0
+        ; We read one
+        SUB J, 1
+    IFN J, 0
+        ; There are more to go, so don't look if this one is all 0s
+        SET PC, .scan_done
         
     ; Now look for a whole sector of 0s
     SET Y, A
@@ -2609,6 +2710,7 @@ shell_builtin_image:
     ADD SP, 2
     
 .return:
+    SET J, POP
     SET I, POP
     SET Y, POP
     SET X, POP
@@ -2666,11 +2768,11 @@ halt:
 
 ; Strings
 str_ready:
-    .asciiz "DC-DOS 3.0 Ready"
+    .asciiz "DC-DOS 3.1 Ready"
 str_prompt:
     .asciiz ":\> "
 str_ver_version1:
-    .asciiz "DC-DOS Command Interpreter 3.0"
+    .asciiz "DC-DOS Command Interpreter 3.1"
 str_ver_version2:
     .asciiz "Copyright (C) UBM Corporation"
 str_not_found:
@@ -2704,7 +2806,7 @@ str_image_imaged:
 str_image_to:
     .asciiz " to "
 str_image_usage:
-    .asciiz "Usage: IMAGE <DRIVE> <FILE>"
+    .asciiz "Usage: IMAGE <DRIVE> <FILE> [<MIN_SECTORS>]"
 str_image_same:
     .asciiz "Can't image drive to itself"
 str_error_not_found:
