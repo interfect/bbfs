@@ -47,8 +47,14 @@ bbfs_file_create:
     ; Say no words are in the file yet.
     SET [A+BBFS_FILE_MAX_OFFSET], 0
     
-    ; We were successful
-    SET [Z], BBFS_ERR_NONE
+    ; Flush the file to commit its zero size
+    ; TODO: roll this into allocate sector
+    SET PUSH, A
+    JSR bbfs_file_flush
+    SET [Z], POP
+    
+    ; Return the error code of the flush, since we were otherwise successful
+    
     SET PC, .return
     
 .error:
