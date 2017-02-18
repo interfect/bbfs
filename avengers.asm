@@ -1,40 +1,39 @@
 ; Self-hosting DCPU Assembler
 
-; Idea: the assembler is based on a finite state automaton that accepts each source character in turn.
-; Each state is represented by an address, and has a table of transitions.
-; Each transition has an associated hook that is called when the transition ahppens, and which works on global state.
-; Characters not matching a transition are ignored, so you stay in the same state.
-; TODO: support a default transition and hook?
+; Idea: the assembler has a lexer which finds identifiers, numbers, operators,
+; quoted strings, and so on.
+;
+; Then a shift-reduce parser comes in with a table of rules. Each rule can match
+; the top two nodes on the parsing stack by type, with filter functions on each,
+; and the next token in the text, and can decide to merge the top two nodes into
+; a new node of a given type, shift in the next token, or both.
+;
+; Finally, the actual assembler bit turns the parse tree into actual assembled
+; code.
 
-; Layout:
+; Tokens/syntax tree nodes look like this
 ;
-;
-; +-------------------
-; | Start Character (nonzero)
-; +-------------------
-; | End Character (inclusive)
-; +-------------------
-; | Next State
-; +-------------------
-; | Hook
-; +-------------------
-; | Start Character (nonzero)
-; +-------------------
-; | End Character (inclusive)
-; +-------------------
-; | Next State
-; +-------------------
-; | Hook
-; +-------------------
-; ...
-; +-------------------
-; | NULL
-; +-------------------
-;
-;
-;
+; +---------------------
+; | Type
+; +---------------------
+; | Child 1 (or null)
+; +---------------------
+; | Child 2 (or null)
+; +---------------------
+; | String start
+; +---------------------
+; | String end
+; +---------------------
 
-; Defines
+.define NODE_SIZEOF, 5
+.define NODE_TYPE, 0
+.define NODE_CHILD1, 1
+.define NODE_CHILD2, 2
+.define NODE_START, 3
+.define NODE_END, 4
+
+
+;  BBOS Defines
 .define BBOS_WRITE_CHAR, 0x1003
 .define BBOS_WRITE_STRING, 0x1004
 .define BBOS_IRQ_MAGIC, 0x4743
@@ -297,12 +296,110 @@
 .dat 0
 .dat 0
 
+; Since we have dynamically instantiated parsing nodes we need a malloc/free
 
+; Heap entries come one after the other and have a used flag and a length
+.define HEAP_HEADER_SIZEOF, 2
+.define HEAP_HEADER_LENGTH, 0
+.define HEAP_HEADER_USED, 1
 
+; malloc(size)
+; Allocate a block of memory
+; [Z]: size of block to allocate
+; Returns: block address, or 0 if none can be allocated
+:malloc
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Pointer to each heap header
+    SET PUSH, B ; Allocation scratch
+    
+    SET A, heap_start
+:malloc_heap_loop
+    
+    ; Is this entry used?
+    IFE [A+HEAP_HEADER_USED], 1
+        ; If so, skip to the next one
+        SET PC, malloc_heap_next
+    IFE [A+HEAP_HEADER_LENGTH], [Z]
+        ; This block is exactly the rigth size
+        SET PC, malloc_heap_found
+    SET B, [Z]
+    ADD B, HEAP_HEADER_SIZEOF
+    IFL B, [A+HEAP_HEADER_LENGTH]
+        ; We could split this block and have room for our allocation
+        SET PC, malloc_heap_split
+    ; Otherwise fall through and look at the next block
+:malloc_heap_next
+    ; Go to the next heap entry, by skipping actual memory words and the header
+    ADD A, [A+HEAP_HEADER_LENGTH]
+    ADD A, HEAP_HEADER_SIZEOF
+    ; If we hit the end of the heap, give up
+    IFE A, heap_start + HEAP_SIZE
+        SET PC, malloc_heap_not_found
+    SET PC, malloc_heap_loop
+  
+:malloc_heap_split
+    ; We need to split the block at A into one of our allocation's size
+    ; Find where the B block needs to start
+    SET B, A
+    ADD B, HEAP_HEADER_SIZEOF
+    ADD B, [Z]
+    ; Now B is where the next header should be. Initialize it
+    ; It is unused
+    SET [B+HEAP_HEADER_USED], 0
+    ; And it is the size of A's memory, minus the B header, minus the allocation we're doing.
+    SET [B+HEAP_HEADER_LENGTH], [A+HEAP_HEADER_LENGTH]
+    SUB [B+HEAP_HEADER_LENGTH], HEAP_HEADER_SIZEOF
+    SUB [B+HEAP_HEADER_LENGTH], [Z]
+    ; Point A at the new header
+    SET [A+HEAP_HEADER_LENGTH], [Z]
+:malloc_heap_found
+    ; This block at A is great! Allocate it!
+    SET [A+HEAP_HEADER_USED], 1
+    ; Return its memory address
+    SET [Z], A
+    ADD [Z], HEAP_HEADER_SIZEOF
+    SET PC, malloc_return
+:malloc_heap_not_found
+    ; Return null
+    SET [Z], 0x0000
+:malloc_return
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; free(address)
+; Free a block of memory
+; [Z]: address returned from malloc
+; Returns: nothing
+:free
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Pointer to heap block header
+    
+    ; Find the heap header
+    SET A, [Z]
+    SUB A, HEAP_HEADER_SIZEOF
+    
+    ; Mark it free
+    SET [A+HEAP_HEADER_USED], 0
+    
+    ; TODO: merge freed blocks when possible
+    
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
-
-
-
+.define HEAP_SIZE, 0x1000
+:heap_start
+DAT 0
 
 
 
