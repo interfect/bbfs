@@ -111,6 +111,9 @@
 ; A register identifier
 .define NODE_TYPE_REGISTER, 0x1000
 
+; The maximal projection: a whole line
+.define NODE_TYPE_LINE, 0x2000
+
 ; And some error codes
 .define ASM_ERR_NONE, 0x0000
 .define ASM_ERR_LEX_BAD_TOKEN, 0x0001 ; Found something that's not a real token
@@ -161,35 +164,7 @@
     
     ; Parse everything
     ADD SP, 1
-    JSR parse_step
-    SET B, POP
-    
-     ; Print the parse label
-    SET PUSH, str_parsed
-    SET PUSH, 1
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code label
-    SET PUSH, str_error
-    SET PUSH, 0
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code
-    SET PUSH, B
-    SET PUSH, 1
-    JSR write_hex
-    ADD SP, 2
-    
-    ; Dump the parser stack again
-    JSR dump_stack
-    
-    ; Parse everything again
-    ADD SP, 1
-    JSR parse_step
+    JSR parse_stack
     SET B, POP
     
      ; Print the parse label
@@ -616,6 +591,55 @@
     SET A, POP
     SET Z, POP
     SET PC, POP
+
+; parse_stack()
+; Apply parser steps until there's an error or the parsing is done
+; [Z]: caller-allocated return value
+; Returns: error code
+:parse_stack
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Used for peeking at the parser stack
+    
+:parse_stack_loop
+    IFN [token_stack_top], token_stack_start
+        ; If there's stuff on the token stack, keep going
+        SET PC, parse_stack_keep_going
+    IFN [parser_stack_top], parser_stack_start+1
+        ; If there's not exactly one thing on the parser stack, keep going
+        SET PC, parse_stack_keep_going
+
+    ; We know there's just one thing. Is it a maximal projection?
+    SET A, [parser_stack_top]
+    SUB A, 1
+    IFN [A+NODE_TYPE], NODE_TYPE_LINE
+        ; If it's not, keep going
+        SET PC, parse_stack_keep_going
+        
+    ; Otherwise, we must be done!
+    SET [Z], ASM_ERR_NONE
+    SET PC, parse_stack_done
+
+:parse_stack_keep_going
+    ; We still want to parse. Parse for a step
+    SUB SP, 1
+    JSR parse_step
+    SET [Z], POP
+    
+    IFE [Z], ASM_ERR_NONE
+        ; If nothing bad happened, see if we should do another step
+        SET PC, parse_stack_loop
+    ; If we had an error, return it
+
+:parse_stack_done
+    ; No more parsing can happen
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
 
 ; parse_step()
 ; Apply a parser rule to the parser and token stacks if one can be found.
