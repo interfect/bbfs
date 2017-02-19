@@ -161,7 +161,7 @@
     
     ; Parse everything
     ADD SP, 1
-    JSR parse_stack
+    JSR parse_step
     SET B, POP
     
      ; Print the parse label
@@ -189,7 +189,7 @@
     
     ; Parse everything again
     ADD SP, 1
-    JSR parse_stack
+    JSR parse_step
     SET B, POP
     
      ; Print the parse label
@@ -617,11 +617,11 @@
     SET Z, POP
     SET PC, POP
 
-; parse_stack()
+; parse_step()
 ; Apply a parser rule to the parser and token stacks if one can be found.
 ; [Z]: caller-allocated return space
 ; Returns: error code
-:parse_stack
+:parse_step
     ; Set up frame pointer
     SET PUSH, Z
     SET Z, SP
@@ -642,30 +642,30 @@
     
     ; Scan the rules table, looking for the first matching rule to apply
     SET A, parser_rules
-:parse_stack_rule_loop
+:parse_step_rule_loop
     ; If there's a rule that says don't do anything, we assume it's the all-null rule.
     IFE [A+RULE_SHIFT], 0
         IFE [A+RULE_REDUCE], 0
-            SET PC, parse_stack_rule_end
+            SET PC, parse_step_rule_end
             
     IFE [A+RULE_CHILD1], 0
         ; Don't check the first child if one isn't used
-        SET PC, parse_stack_child1_ok
+        SET PC, parse_step_child1_ok
         
     ; Find the next-to-top item on the parser stack
     SET X, B
     SUB X, 2
     IFL X, parser_stack_start
         ; We need a next-to-top item for this rule and there isn't one
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
     SET X, [X] ; Dereference and get node's address
     IFN [X+NODE_TYPE], [A+RULE_CHILD1]
         ; This node isn't the right type for this rule
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
         
     IFE [A+RULE_FILTER1], 0
         ; No function to filter the first child, so just take it
-        SET PC, parse_stack_child1_ok
+        SET PC, parse_step_child1_ok
         
     ; Call the filter function on the node address
     SET PUSH, X
@@ -674,30 +674,30 @@
     
     IFE I, 0
         ; This child didn't validate for this rule
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
     ; Otherwise, fall through to the child 1 valid case
         
-:parse_stack_child1_ok
+:parse_step_child1_ok
     ; We know child 1 is OK or not used. Check child 2
     
     IFE [A+RULE_CHILD2], 0
         ; Don't check the second/only child if one isn't used
-        SET PC, parse_stack_child2_ok
+        SET PC, parse_step_child2_ok
         
     ; Find the top item on the parser stack
     SET X, B
     SUB X, 1
     IFL X, parser_stack_start
         ; We need a top item for this rule and there isn't one
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
     SET X, [X] ; Dereference and get node's address
     IFN [X+NODE_TYPE], [A+RULE_CHILD2]
         ; This node isn't the right type for this rule
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
         
     IFE [A+RULE_FILTER2], 0
         ; No function to filter the first child, so just take it
-        SET PC, parse_stack_child2_ok
+        SET PC, parse_step_child2_ok
         
     ; Call the filter function on the node address
     SET PUSH, X
@@ -706,35 +706,35 @@
     
     IFE I, 0
         ; This child didn't validate for this rule
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
     ; Otherwise, fall through to the child 2 valid case
     
-:parse_stack_child2_ok
+:parse_step_child2_ok
     ; We know child2 is also OK or not used. Check the incoming token.
     
     IFE [A+RULE_TOKEN], 0
         ; Don't check the next token if one isn't used
-        SET PC, parse_stack_token_ok
+        SET PC, parse_step_token_ok
     
     SET Y, C
     SUB Y, 1
     IFL Y, token_stack_start
         ; We need a next token for this rule and there isn't one
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
     SET Y, [Y] ; Dereference and get node's address
     IFN [Y+NODE_TYPE], [A+RULE_TOKEN]
         ; This token isn't the right type for this rule
-        SET PC, parse_stack_rule_next
+        SET PC, parse_step_rule_next
         
     ; Tokens don't have filter functions, so matching the type is enough
     
-:parse_stack_token_ok
+:parse_step_token_ok
     ; We know the token is also OK or not used.
     ; That means we need to apply this rule!
     ; First, see if we need to reduce
     IFE [A+RULE_REDUCE], 0
         ; No reduce needed. Maybe we need to shift?
-        SET PC, parse_stack_try_shift 
+        SET PC, parse_step_try_shift 
     
     ; We definitely need to reduce
     
@@ -745,7 +745,7 @@
     
     IFE I, 0x0000
         ; Out of memory
-        SET PC, parse_stack_err_memory
+        SET PC, parse_step_err_memory
         
     ; Zero out right child, which might not get filled
     SET [I+NODE_CHILD2], 0
@@ -755,11 +755,11 @@
     
     IFE [A+RULE_CHILD1], 0
         ; No second child needed
-        SET PC, parse_stack_single_child
+        SET PC, parse_step_single_child
     ; Pop a right child from the top of the parser stack
     SUB B, 1
     SET [I+NODE_CHILD2], [B]
-:parse_stack_single_child ; If the rule has only one child, make it the left child
+:parse_step_single_child ; If the rule has only one child, make it the left child
     ; Pop a left child from the top of the parser stack
     SUB B, 1
     SET [I+NODE_CHILD1], [B]
@@ -783,12 +783,12 @@
     
     ; Then fall through to considering a shift
     
-:parse_stack_try_shift
+:parse_step_try_shift
     ; Maybe we need to shift a token in
     
     IFE [A+RULE_SHIFT], 0
         ; No shift needed. So rule is applied!
-        SET PC, parse_stack_rule_applied
+        SET PC, parse_step_rule_applied
     
     ; Knock the node off the token stack
     SUB C, 1
@@ -802,31 +802,27 @@
     SET [token_stack_top], C
     
     ; Shift accomplished!
-    SET PC, parse_stack_rule_applied
+    SET PC, parse_step_rule_applied
     
-:parse_stack_rule_next
+:parse_step_rule_next
     ; Try the next rule
     ADD A, RULE_SIZEOF
-    SET PC, parse_stack_rule_loop
+    SET PC, parse_step_rule_loop
 
-:parse_stack_rule_applied
+:parse_step_rule_applied
     ; We have successfully applied a rule
-    
-    ; TODO: try and apply more rules until we generate a maximal projection and have emptied the token stack
-    
-    ; For now we just use one rule
     SET [Z], ASM_ERR_NONE
-    SET PC, parse_stack_return
+    SET PC, parse_step_return
 
-:parse_stack_rule_end
+:parse_step_rule_end
     ; We ran out of rules! That's an error
     SET [Z], ASM_ERR_SYNTAX
-    SET PC, parse_stack_return
-:parse_stack_err_memory
+    SET PC, parse_step_return
+:parse_step_err_memory
     ; We ran out of memory on our heap
     SET [Z], ASM_ERR_MEMORY
-    SET PC, parse_stack_return
-:parse_stack_return
+    SET PC, parse_step_return
+:parse_step_return
     SET I, POP
     SET Y, POP
     SET X, POP
