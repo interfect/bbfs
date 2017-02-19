@@ -1,4 +1,13 @@
-; Self-hosting DCPU Assembler
+;   __   _  _  ____  __ _   ___  ____  ____             
+;  / _\ / )( \(  __)(  ( \ / __)(  __)(  _ \            
+; /    \\ \/ / ) _) /    /( (_ \ ) _)  )   /            
+; \_/\_/ \__/ (____)\_)__) \___/(____)(__\_)            
+;   __   ____  ____  ____  _  _  ____  __    ____  ____ 
+;  / _\ / ___)/ ___)(  __)( \/ )(  _ \(  )  (  __)/ ___)
+; /    \\___ \\___ \ ) _) / \/ \ ) _ (/ (_/\ ) _) \___ \
+; \_/\_/(____/(____/(____)\_)(_/(____/\____/(____)(____/
+;
+; AVENGER: A self-hosting assembler for DCPU-16
 
 ; Idea: the assembler has a lexer which finds identifiers, numbers, operators,
 ; quoted strings, and so on.
@@ -33,8 +42,11 @@
 .define NODE_END, 4
 
 ; Here are the node types
+
 ; Tokens for bottom level lexemes
-; Identifier, which can be a register name, label name, constant name, or instruction
+
+; Identifier, which can be a register name, label name, constant name, or
+; instruction
 .define NODE_TYPE_TOKEN_ID, 0x0001
 ; Comma character, for separating arguments
 .define NODE_TYPE_TOKEN_COMMA, 0x0002
@@ -42,6 +54,8 @@
 .define NODE_TYPE_TOKEN_DEC, 0x0003
 ; Hexadecimal number
 .define NODE_TYPE_TOKEN_HEX, 0x0004
+
+; TODO: higher-level syntax tree nodes
 
 ; And some error codes
 .define ASM_ERR_NONE, 0x0000

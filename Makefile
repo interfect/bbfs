@@ -1,4 +1,4 @@
-all: bbfs_test.dsk shell.dsk bbfs2_test.dsk avengers.dsk bootloader.bin hello.bin help.bin echo.bin
+all: bbfs_test.dsk shell.dsk bbfs2_test.dsk avenger.dsk bootloader.bin hello.bin help.bin echo.bin
 
 %.dsk: %.bin
 	build_bootable_floppy $< $@
@@ -24,5 +24,5 @@ help.bin: help.asm dcdos_api.inc.asm
 echo.bin: echo.asm dcdos_api.inc.asm
 	dasm $< $@
 	
-avengers.bin: avengers.asm
+avenger.bin: avenger.asm
 	dasm $< $@
