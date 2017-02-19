@@ -48,12 +48,28 @@
 ; Identifier, which can be a register name, label name, constant name, or
 ; instruction
 .define NODE_TYPE_TOKEN_ID, 0x0001
-; Comma character, for separating arguments
-.define NODE_TYPE_TOKEN_COMMA, 0x0002
 ; Decimal number
-.define NODE_TYPE_TOKEN_DEC, 0x0003
+.define NODE_TYPE_TOKEN_DEC, 0x0002
 ; Hexadecimal number
-.define NODE_TYPE_TOKEN_HEX, 0x0004
+.define NODE_TYPE_TOKEN_HEX, 0x0003
+; String constant ""
+.define NODE_TYPE_TOKEN_STRING, 0x0004
+; Char constant ''
+.define NODE_TYPE_TOKEN_CHAR, 0x0005
+; Comment
+.define NODE_TYPE_TOKEN_COMMENT, 0x0006
+; Comma character, for separating arguments
+.define NODE_TYPE_TOKEN_COMMA, 0x0007
+; Colon character, for creating labels
+.define NODE_TYPE_TOKEN_COLON, 0x0008
+; Open bracket, for starting dereferences
+.define NODE_TYPE_TOKEN_OPENBRACKET, 0x0009
+; Close bracket, for ending dereferences
+.define NODE_TYPE_TOKEN_CLOSEBRACKET, 0x000A
+; Addition operator
+.define NODE_TYPE_TOKEN_PLUS, 0x000B
+; Subtraction operator
+.define NODE_TYPE_TOKEN_MINUS, 0x000C
 
 ; TODO: higher-level syntax tree nodes
 
@@ -103,7 +119,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "SET A, 1"
+.asciiz "SET A, 1+2"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -230,10 +246,6 @@
     IFE C, 1
         SET PC, lex_line_parse_id
         
-    ; If we see a comma, that's a comma token
-    IFE [A], 0x2C ; ','
-        SET PC, lex_line_parse_comma
-        
     ; If we see a 0x, start a hex number
     IFE [A], 0x30 ; '0'
         IFE [A+1], 0x78 ; 'x'
@@ -243,9 +255,23 @@
             SET PC, lex_line_parse_hex
     
     ; If we see a digit, start a decimal number
-    IFG [A], 0x29 ; '0' - 1
+    IFG [A], 0x2F ; '0' - 1
         IFL [A], 0x3A ; '9' + 1
             SET PC, lex_line_parse_dec
+            
+    ; Try a bunch of single-character tokens
+    IFE [A], 0x2C ; ','
+        SET PC, lex_line_parse_comma
+    IFE [A], 0x3A ; ':'
+        SET PC, lex_line_parse_colon
+    IFE [A], 0x5B ; '['
+        SET PC, lex_line_parse_openbracket
+    IFE [A], 0x5D ; ']'
+        SET PC, lex_line_parse_closebracket
+    IFE [A], 0x2B ; '+'
+        SET PC, lex_line_parse_plus
+    IFE [A], 0x2D ; '-'
+        SET PC, lex_line_parse_minus
     
     ; Otherwise, have an error
     SET [Z], ASM_ERR_LEX_BAD_TOKEN
@@ -273,45 +299,12 @@
     SET PUSH, NODE_TYPE_TOKEN_ID ; Arg 1 - type
     SET PUSH, B ; Arg 2 - string start
     SET PUSH, A ; Arg 3 - string past end
-    JSR push_token
-    SET C, POP
-    ADD SP, 2
-    
-    ; If there was an error, return it
-    IFN C, ASM_ERR_NONE
-        SET [Z], C
-    IFN C, ASM_ERR_NONE
-        SET PC, lex_line_done
-    
-    ; Continue with the next token
-    SET PC, lex_line_scan_string
-    
-:lex_line_parse_comma
-    ; Make a token for just this character
-    
-    SET PUSH, NODE_TYPE_TOKEN_COMMA ; Arg 1 - type
-    SET PUSH, A ; Arg 2 - string start
-    ADD A, 1
-    SET PUSH, A ; Arg 3 - string past end
-    JSR push_token
-    SET C, POP
-    ADD SP, 2
-    
-    ; If there was an error, return it
-    IFN C, ASM_ERR_NONE
-        SET [Z], C
-    IFN C, ASM_ERR_NONE
-        SET PC, lex_line_done
-    
-    ; Continue with the next token. A is already in place
-    SET PC, lex_line_scan_string
+    SET PC, lex_line_push_and_finish
     
 :lex_line_parse_hex
     ; Make a token for the extent of this hex number
-    
     SET B, A ; Save the start of the hex number
     ADD A, 2 ; Skip the "0x"
-    
 :lex_line_parse_hex_loop
     SET C, 0 ; Will note if this is a valid hex character or not
     IFG [A], 0x2F ; '0' - 1
@@ -334,24 +327,11 @@
     SET PUSH, NODE_TYPE_TOKEN_HEX ; Arg 1 - token type
     SET PUSH, B ; Arg 2 - token start
     SET PUSH, A ; Arg 3 - token past end
-    JSR push_token
-    SET C, POP
-    ADD SP, 2
-    
-    ; If there was an error, return it
-    IFN C, ASM_ERR_NONE
-        SET [Z], C
-    IFN C, ASM_ERR_NONE
-        SET PC, lex_line_done
-    
-    ; Continue with the next token
-    SET PC, lex_line_scan_string
+    SET PC, lex_line_push_and_finish
     
 :lex_line_parse_dec
     ; Make a token for the extent of this decimal number
-    
     SET B, A ; Save the start of the decimal number
-    
 :lex_line_parse_dec_loop
     IFL [A], 0x30 ; '0'
         SET PC, lex_line_parse_dec_found_end ; Not a digit
@@ -365,18 +345,49 @@
     SET PUSH, NODE_TYPE_TOKEN_DEC ; Arg 1 - token type
     SET PUSH, B ; Arg 2 - token start
     SET PUSH, A ; Arg 3 - token past end
+    SET PC, lex_line_push_and_finish
+    
+    ; Here are all the single character tokens
+:lex_line_parse_comma
+    SET PUSH, NODE_TYPE_TOKEN_COMMA ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+:lex_line_parse_colon
+    SET PUSH, NODE_TYPE_TOKEN_COLON ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+:lex_line_parse_openbracket
+    SET PUSH, NODE_TYPE_TOKEN_OPENBRACKET ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+:lex_line_parse_closebracket
+    SET PUSH, NODE_TYPE_TOKEN_CLOSEBRACKET ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+:lex_line_parse_plus
+    SET PUSH, NODE_TYPE_TOKEN_PLUS ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+:lex_line_parse_minus
+    SET PUSH, NODE_TYPE_TOKEN_MINUS ; Arg 1 - type
+    SET PC, lex_line_single_char_token
+    
+:lex_line_single_char_token
+    ; All the single character tokens finish the same way
+    SET PUSH, A ; Arg 2 - string start
+    ADD A, 1
+    SET PUSH, A ; Arg 3 - string past end
+    SET PC, lex_line_push_and_finish
+    
+:lex_line_push_and_finish
+    ; We already put the arguments for the token push on the stack.
+    ; Push them, handle any error, and parse the next token
     JSR push_token
     SET C, POP
     ADD SP, 2
-    
     ; If there was an error, return it
     IFN C, ASM_ERR_NONE
         SET [Z], C
     IFN C, ASM_ERR_NONE
         SET PC, lex_line_done
-    
     ; Continue with the next token
     SET PC, lex_line_scan_string
+    
 :lex_line_done
     SET C, POP
     SET B, POP
