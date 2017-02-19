@@ -109,10 +109,84 @@
 ; Higher-level syntax tree nodes
 
 ; A register identifier
+; Any of the normal 8, or SP
 .define NODE_TYPE_REGISTER, 0x1000
+; A value that can appear anywhere in an expression: decimal, hex, char, or identifier
+.define NODE_TYPE_VALUE, 0x1001
+; A sum of constants expression
+.define NODE_TYPE_SUMS, 0x1002
+; A sum of constants expression with a trailing operator
+.define NODE_TYPE_SUMSOP, 0x1003
+
+; TODO: implement multiplication
+; A product of constants expression
+.define NODE_TYPE_PRODUCTS, 0x1004
+; A product of constants expression with a trailing operator
+.define NODE_TYPE_PRODUCTSOP, 0x1005
+
+; A constant expression
+.define NODE_TYPE_CONSTEXP, 0x1006
+
+; An expression involving a register (which may be a sum but not a product)
+; The register might actually be SP, or it could be any of the standard 8
+.define NODE_TYPE_REGEXP, 0x1007
+; An expression involving a register with a trailing +/- operator
+.define NODE_TYPE_REGEXPOP, 0x1008
+
+; An expression in an open dereferencing bracket set
+.define NODE_TYPE_DEREFOPEN, 0x1009
+; A closed dereferencing bracket set
+.define NODE_TYPE_DEREF, 0x100A
+
+; The PC or EX registers, which can't be in expressions
+.define NODE_TYPE_SPECIALREG, 0x100B
+
+; The special PUSH operand, legal only as b (first arg)
+.define NODE_TYPE_PUSH, 0x100C 
+; The special POP operand, legal only as a (second arg)
+.define NODE_TYPE_POP, 0x100D
+
+; A legal arument
+.define NODE_TYPE_ARG, 0x2000
+; TODO: can't distinguish between A and B at this level really...
+
+; An ID that refers to a valid basic opcode
+.define NODE_TYPE_BASICOPCODE, 0x2002
+; An ID that refers to a valid special opcode
+.define NODE_TYPE_SPECIALOPCODE, 0x2003
+
+; A basic opcode with it's b argument
+.define NODE_TYPE_BASICANDB, 0x2004
+; A special opcode, or a basic opcode with its b argument and comma
+.define NODE_TYPE_AREADY, 0x2005
+; An opcode of either type with all its arguments
+.define NODE_TYPE_OPERATION, 0x2006
+
+; A valid directive ID, which takes one or more arguments
+.define NODE_TYPE_DIRECTIVE, 0x3000
+; A directive with 0 or more arguments, comma separated. Can be a directive and
+; an argument, or a directive-phrase-comma and an argument.
+.define NODE_TYPE_DIRECTIVEPHRASE, 0x3001
+; A directive phrase with a comma, which can take another argument
+.define NODE_TYPE_DIRECTIVEPHRASECOMMA, 0x3002
+
+; A label with its colon. The colon can be either child, and the ID will be the other
+.define NODE_TYPE_LABEL, 0x4000
+; A label as a left child, with an operation or directive or additional labeledphrase as the right child.
+; Can also be just a single lable child.
+.define NODE_TYPE_LABELEDPHRASE, 0x4002
+
+; An operation, directive, or labeledphrase as a left child, and an optional
+; comment as the right child.
+.define NODE_TYPE_COMMENTEDPHRASE, 0x5000
+
+; Operators by precedence
+.define NODE_TYPE_ADDSUBOP, 0x6000
+.define NODE_TYPE_MULDIVOP, 0x6001
 
 ; The maximal projection: a whole line
-.define NODE_TYPE_LINE, 0x2000
+; Child is always a commentedphrase
+.define NODE_TYPE_LINE, 0x7000
 
 ; And some error codes
 .define ASM_ERR_NONE, 0x0000
@@ -163,7 +237,7 @@
     JSR unshift_all
     
     ; Parse everything
-    ADD SP, 1
+    SUB SP, 1
     JSR parse_stack
     SET B, POP
     
@@ -203,8 +277,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "A"
-;.asciiz ":thing SET A, '1' ; Cool beans"
+.asciiz ":thing SET A, B ; Cool beans"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -861,15 +934,65 @@
 ; Structure:
 ; Child 1 type, Child 1 filter, Child 2 type, Child 2 filter, Next token type, Reduce type, shift flag
 ; If we see an identifier that can be a register, we should reduce it to a register
+; Register names are reserved and can't be labels or other things
 .dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_register, 0, NODE_TYPE_REGISTER, 0
+; We also reserve the names of opcodes
+.dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_basic_opcode, 0, NODE_TYPE_BASICOPCODE, 0
+.dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_special_opcode, 0, NODE_TYPE_SPECIALOPCODE, 0
+; Otherwise, if we see a colon and an identifier, that's a label
+.dat NODE_TYPE_TOKEN_COLON, 0, NODE_TYPE_TOKEN_ID, 0, 0, NODE_TYPE_LABEL, 0
+; In either order
+.dat NODE_TYPE_TOKEN_ID, 0, NODE_TYPE_TOKEN_COLON, 0, 0, NODE_TYPE_LABEL, 0
+; Registers immediately become regexps
+.dat 0, 0, NODE_TYPE_REGISTER, 0, 0, NODE_TYPE_REGEXP, 0
+; Regexps with operators after them pull in the operators
+.dat 0, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_PLUS, 0, 1
+.dat 0, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_MINUS, 0, 1
+; Operators immediately become nodes by precedence
+.dat 0, 0, NODE_TYPE_TOKEN_PLUS, 0, 0, NODE_TYPE_ADDSUBOP, 0
+.dat 0, 0, NODE_TYPE_TOKEN_MINUS, 0, 0, NODE_TYPE_ADDSUBOP, 0
+; Regexps become arguments if they can't do anything else
+.dat 0, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_ARG, 0
+; Opcodes grab arguments
+; Basic opcode gets first arg
+.dat NODE_TYPE_BASICOPCODE, 0, NODE_TYPE_ARG, 0, 0, NODE_TYPE_BASICANDB, 0
+; Then it wants a comma
+.dat 0, 0, NODE_TYPE_BASICANDB, 0, NODE_TYPE_TOKEN_COMMA, 0, 1
+; Then a comma makes it ready for a
+.dat NODE_TYPE_BASICANDB, 0, NODE_TYPE_TOKEN_COMMA, 0, 0, NODE_TYPE_AREADY, 0
+; Or a special opcode just is ready for a
+.dat 0, 0, NODE_TYPE_SPECIALOPCODE, 0, 0, NODE_TYPE_AREADY, 0
+; Then something that needs a gets a
+.dat NODE_TYPE_AREADY, 0, NODE_TYPE_ARG, 0, 0, NODE_TYPE_OPERATION, 0
+; A label and an operation make a labeled phrase
+.dat NODE_TYPE_LABEL, 0, NODE_TYPE_OPERATION, 0, 0, NODE_TYPE_LABELEDPHRASE, 0
+; A labeled phrase pulls in a comment
+.dat 0, 0, NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 1
+; A labeled phrase and a comment make a commented phrase
+.dat NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0
 ; If there's nothing else to do, shift in an ID
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_ID, 0, 1
+; If there's nothing else to do, a line could start with a colon
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_COLON, 0, 1
+; If there's nothing else to do, a line could even start with a comment
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_COMMENT, 0, 1
+; If there's nothing else to do, pull in add operators
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_PLUS, 0, 1
+; If there's nothing else to do, pull in sub operators
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_MINUS, 0, 1
+; If there's nothing else to do, pull in open brackets
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_OPENBRACKET, 0, 1
+; If there's nothing else to do, pull in close brackets
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, 0, 1
+; A commented phrase can become a whole line
+.dat 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0, 0, NODE_TYPE_LINE, 0
 ; Terminate the table
 .dat 0, 0, 0, 0, 0, 0, 0
 
 ; filter_is_register(*token)
 ; Decide if an ID token is a register name or not.
-; Special registers (PC, SP) don't count
+; Special registers (PC, EX) don't count, but SP does because it has all the
+; indexing modes available.
 ; [Z]: address of the ID token node
 ; Returns: 1 if it is a register name, 0 otherwise
 ; Set up frame pointer
@@ -888,6 +1011,10 @@
     ; Get the length of the identifier
     SET B, [A+NODE_END]
     SUB B, [A+NODE_START]
+    
+    IFE B, 2
+        ; Only one 2-letter normal-ish register exists
+        SET PC, filter_is_register_check_sp
     
     IFN B, 1
         ; If it's not a single letter it can't be a register
@@ -919,12 +1046,303 @@
     ; If we aren't a string starting with any of those letters, we can't be a
     ; register even if we are the right length.
     SET [Z], 0
+    SET PC, filter_is_register_done
+    
+:filter_is_register_check_sp
+    ; Is this ther only 2-letter normal register, SP?
+    
+    ; Compare the strings
+    SET PUSH, [A+NODE_START]
+    SET PUSH, str_sp
+    JSR strcasecmp
+    SET B, POP
+    ADD SP, 1
+    
+    ; If they're not equal, this isn;t a register.
+    IFN B, 0
+        SET [Z], 0
     
 :filter_is_register_done
     SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP
+    
+; filter_is_basic_opcode(*token)
+; Return true if the given ID token matches a known basic opcode
+; [Z]: token node pointer
+; Returns: 1 if ID is a valid basic opcode, 0 otherwise
+:filter_is_basic_opcode
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Node pointer
+    SET PUSH, B ; Node string
+    
+    ; Grab the node
+    SET A, [Z]
+    
+    ; Set the return code for an error
+    SET [Z], 0
+    
+    ; Copy the string of the node to a null-terminated buffer
+    SET PUSH, A
+    JSR node_to_string
+    SET B, POP
+    
+    IFE B, 0x0000
+        ; TODO: handle error
+        SET PC, filter_is_basic_opcode_done
+    
+    ; Get the opcode value
+    SET PUSH, opcode_table_basic
+    SET PUSH, B
+    JSR lookup_string
+    SET [Z], POP
+    ADD SP, 1
+    
+    ; Free the buffer
+    SET PUSH, B
+    JSR free
+    ADD SP, 1
+    
+    ; If the value is nonzero, return true
+    IFG [Z], 0
+        SET Z, 1
+    ; Otherwise, leave it as 0 (not found = not an opcode)
+:filter_is_basic_opcode_done
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; filter_is_special_opcode(*token)
+; Return true if the given ID token matches a known special opcode
+; [Z]: token node pointer
+; Returns: 1 if ID is a valid special opcode, 0 otherwise
+:filter_is_special_opcode
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Node pointer
+    SET PUSH, B ; Node string
+    
+    ; Grab the node
+    SET A, [Z]
+    
+    ; Set the return code for an error
+    SET [Z], 0
+    
+    ; Copy the string of the node to a null-terminated buffer
+    SET PUSH, A
+    JSR node_to_string
+    SET B, POP
+    
+    IFE B, 0x0000
+        ; TODO: handle error
+        SET PC, filter_is_special_opcode_done
+    
+    ; Get the opcode value
+    SET PUSH, opcode_table_special
+    SET PUSH, B
+    JSR lookup_string
+    SET [Z], POP
+    ADD SP, 1
+    
+    ; Free the buffer
+    SET PUSH, B
+    JSR free
+    ADD SP, 1
+    
+    ; If the value is nonzero, return true
+    IFG [Z], 0
+        SET Z, 1
+    ; Otherwise, leave it as 0 (not found = not an opcode)
+:filter_is_special_opcode_done
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; node_to_string(*node)
+; Allocate a new string with the contents of the given node. Caller must free it.
+; [Z]: node pointer
+; Returns: string address, or null if it could not be allocated
+:node_to_string
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Node pointer
+    SET PUSH, B ; Node string length, node string end
+    SET PUSH, I ; Original string pointer
+    SET PUSH, J ; New string pointer
+    
+    ; Grab the node
+    SET A, [Z]
+    
+    ; Calculate string length with null terminator
+    SET B, [A+NODE_END]
+    SUB B, [A+NODE_START]
+    ADD B, 1
+    
+    ; Allocate new string
+    SET PUSH, B
+    JSR malloc
+    SET J, POP
+    
+    ; Whatever this is, we return it
+    SET [Z], J
+    
+    IFE J, 0x0000
+        ; Nothing got allocated so don't copy
+        SET PC, node_to_string_done
+        
+    ; Start copying from the start of the string, and continue until the end
+    SET I, [A+NODE_START]
+    SET B, [A+NODE_END]
+    
+:node_to_string_loop
+    IFE I, B
+        ; Hit the end
+        SET PC, node_to_string_done
+    ; Copy a character to the new string
+    STI [J], [I]
+    SET PC, node_to_string_loop
+:node_to_string_done
+    SET J, POP
+    SET I, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; lookup_string(*table, *str):
+; Get the table value for the given null-terminated string, or 0
+; if it is not an entry in the given table.
+; Uses a null-tertminated table of string pointers and values.
+; [Z+1]: table address
+; [Z]: string key
+; Returns: table value, or 0 if string is not in the table
+:lookup_string
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; table row pointer
+    SET PUSH, B ; Return value scratch
+    SET PUSH, C ; String we're looking up
+    
+    ; Save our string
+    SET C, [Z]
+    ; Say we haven't found it
+    SET [Z], 0
+    
+    SET A, [Z+1] ; Start with first row of the table
+:lookup_string_loop
+    IFE [A], 0
+        ; Null terminator
+        SET PC, lookup_string_done
+    
+    ; Compare the string we're looking for against this table entry
+    SET PUSH, [A]
+    SET PUSH, C
+    JSR strcasecmp
+    SET B, POP
+    ADD SP, 1
+    
+    IFE B, 0
+        ; The string was found
+        SET [Z], [A+1]
+    IFE B, 0
+        SET PC, lookup_string_done
+        
+    ; Try the next entry
+    ADD A, 2
+    SET PC, lookup_string_loop
+    
+:lookup_string_done
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+    
+; strcasecmp(*str1, *str2):
+; Case-insensitively compare the two strings, at least one of which must be
+; null-terminated. Note that a terminated string never equals an unterminated
+; string.
+; [Z+1]: string 1
+; [Z]: string 2
+; Returns: -1 if str1 < str2, 0 if they are equal, and 1 if str2 < str1
+:strcasecmp
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Case scratch
+    SET PUSH, B ; Case scratch in other string
+    SET PUSH, I ; String 1 pointer
+    SET PUSH, J ; String 2 pointer
+    
+    ; Load the string pointers
+    SET I, [Z+1]
+    SET J, [Z]
+    
+    ; Assume strings are equal
+    SET [Z], 0
+    
+:strcasecmp_loop
+    SET A, [I]
+    SET B, [J]
+    
+    ; Upper-case str1 character
+    IFG A, 0x60 ; 'A' - 1
+        IFL A, 0x7B ; 'Z' + 1
+            SUB A, 0x20
+            
+    ; Upper-case str2 character
+    IFG B, 0x60 ; 'A' - 1
+        IFL B, 0x7B ; 'Z' + 1
+            SUB B, 0x20
+
+    IFL A, B
+        ; String 1 smaller
+        SET [Z], 0xFFFF
+    IFL B, A
+        ; String 2 smaller
+        SET [Z], 1
+        
+    ; Stop if either is 0
+    IFE [I], 0
+        SET PC, strcasecmp_done
+    IFE [J], 0
+        SET PC, strcasecmp_done
+    
+    ; Look at the next character
+    ADD I, 1
+    ADD J, 1
+    
+    IFE [Z], 0
+        ; Keep going as long as it's indeterminate which string wins
+        SET PC, strcasecmp_loop
+    
+:strcasecmp_done
+    SET J, POP
+    SET I, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+
 
 ; assemble_instruction(*line, *dest)
 ; Assemble a single statement in a null-terminated string.
@@ -1250,6 +1668,157 @@
     SET A, POP
     SET Z, POP
     SET PC, POP
+    
+; We have a big bunch of string constants for all the string bits we need to
+; parse
+; Register names
+:str_a
+.asciiz "A"
+:str_b
+.asciiz "B"
+:str_c
+.asciiz "C"
+:str_x
+.asciiz "X"
+:str_y
+.asciiz "Y"
+:str_z
+.asciiz "Z"
+:str_i
+.asciiz "I"
+:str_j
+.asciiz "J"
+:str_sp
+.asciiz "SP"
+:str_pc
+.asciiz "PC"
+:str_ex
+.asciiz "EX"
+; Push and pop
+:str_push
+.asciiz "PUSH"
+:str_pop
+.asciiz "POP"
+
+; Basic opcode names
+:str_set
+.asciiz "SET"
+:str_add
+.asciiz "ADD"
+:str_sub
+.asciiz "SUB"
+:str_mul
+.asciiz "MUL"
+:str_mli
+.asciiz "MLI"
+:str_div
+.asciiz "DIV"
+:str_dvi
+.asciiz "DVI"
+:str_mod
+.asciiz "MOD"
+:str_mdi
+.asciiz "MDI"
+:str_and
+.asciiz "AND"
+:str_bor
+.asciiz "BOR"
+:str_xor
+.asciiz "XOR"
+:str_shr
+.asciiz "SHR"
+:str_asr
+.asciiz "ASR"
+:str_shl
+.asciiz "SHL"
+:str_ifb
+.asciiz "IFB"
+:str_ifc
+.asciiz "IFC"
+:str_ife
+.asciiz "IFE"
+:str_ifn
+.asciiz "IFN"
+:str_ifg
+.asciiz "IFG"
+:str_ifa
+.asciiz "IFA"
+:str_ifl
+.asciiz "IFL"
+:str_ifu
+.asciiz "IFU"
+:str_adx
+.asciiz "ADX"
+:str_sbx
+.asciiz "SBX"
+:str_sti
+.asciiz "STI"
+:str_std
+.asciiz "STD"
+
+; Special opcode names
+:str_jsr
+.asciiz "JSR"
+:str_int
+.asciiz "INT"
+:str_iag
+.asciiz "IAG"
+:str_ias
+.asciiz "IAS"
+:str_rfi
+.asciiz "RFI"
+:str_iaq
+.asciiz "IAQ"
+:str_hwn
+.asciiz "HWN"
+:str_hwq
+.asciiz "HWQ"
+:str_hwi
+.asciiz "HWI"
+
+; Now we have null-terminated string, code tables for basic and special opcodes
+
+:opcode_table_basic
+.dat str_set, 0x01
+.dat str_add, 0x02
+.dat str_sub, 0x03
+.dat str_mul, 0x04
+.dat str_mli, 0x05
+.dat str_div, 0x06
+.dat str_dvi, 0x07
+.dat str_mod, 0x08
+.dat str_mdi, 0x09
+.dat str_and, 0x0A
+.dat str_bor, 0x0B
+.dat str_xor, 0x0C
+.dat str_shr, 0x0D
+.dat str_asr, 0x0E
+.dat str_shl, 0x0F
+.dat str_ifb, 0x10
+.dat str_ifc, 0x11
+.dat str_ife, 0x12
+.dat str_ifn, 0x13
+.dat str_ifg, 0x14
+.dat str_ifa, 0x15
+.dat str_ifl, 0x16
+.dat str_ifu, 0x17
+.dat str_adx, 0x1A
+.dat str_sbx, 0x1B
+.dat str_sti, 0x1E
+.dat str_std, 0x1F
+.dat 0, 0
+
+:opcode_table_special
+.dat str_jsr, 0x01
+.dat str_int, 0x08
+.dat str_iag, 0x09
+.dat str_ias, 0x0A
+.dat str_rfi, 0x0B
+.dat str_iaq, 0x0C
+.dat str_hwn, 0x10
+.dat str_hwq, 0x11
+.dat str_hwi, 0x12
+.dat 0, 0
 
 .define PARSER_STACK_SIZE, 100
 
