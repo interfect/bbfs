@@ -594,6 +594,7 @@
     SET PUSH, A ; BBOS scratch
     SET PUSH, B ; Stack entries
     SET PUSH, C ; Nodes themselves
+    SET PUSH, I ; String scratch
     
     SET B, [parser_stack_top]
     
@@ -647,26 +648,38 @@
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    SET PUSH, [C+NODE_START]
-    SET PUSH, 0
-    JSR write_hex
-    ADD SP, 2
+    ; Now dump all the characters from start to end
+    SET I, [C+NODE_START]
+:dump_stack_content_loop
+    ; If we hit the end of the contents, stop    
+    IFE I, [C+NODE_END]
+        SET PC, dump_stack_content_done
     
-    SET PUSH, 0x20 ; ' '
+    ; Dump this character    
+    SET PUSH, [I]
     SET PUSH, 1
     SET A, BBOS_WRITE_CHAR
     INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
-    SET PUSH, [C+NODE_END]
+    ; Look for the next character
+    ADD I, 1
+    SET PC, dump_stack_content_loop
+        
+:dump_stack_content_done
+
+    ; Print the trailing string for a node (and a newline)
+    SET PUSH, str_node_end
     SET PUSH, 1
-    JSR write_hex
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
     ADD SP, 2
     
     IFN B, parser_stack_start
         ; Still more to do
         SET PC, dump_stack_loop
 :dump_stack_done
+    SET I, POP
     SET C, POP
     SET B, POP
     SET A, POP
@@ -674,6 +687,8 @@
     SET PC, POP
 :str_node
 .asciiz "Node: "
+:str_node_end
+.dat 0x0000
 
 .define PARSER_STACK_SIZE, 100
 
