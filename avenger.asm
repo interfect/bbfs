@@ -120,7 +120,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "SET A, '1'"
+.asciiz ":thing SET A, '1' ; Cool beans"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -268,6 +268,10 @@
     IFE [A], 0x27 ; '\''
         SET PC, lex_line_parse_char
         
+    ; If we see a semicolon, parse a comment
+    IFE [A], 0x3B ; ';'
+        SET PC, lex_line_parse_comment
+        
     ; Try a bunch of single-character tokens
     IFE [A], 0x2C ; ','
         SET PC, lex_line_parse_comma
@@ -398,6 +402,21 @@
 :lex_line_parse_char_done
     ADD A, 1 ; Include the close quote
     SET PUSH, NODE_TYPE_TOKEN_CHAR ; Arg 1 - token type
+    SET PUSH, B ; Arg 2 - token start
+    SET PUSH, A ; Arg 3 - token past end
+    SET PC, lex_line_push_and_finish
+    
+:lex_line_parse_comment
+    ; Handle a comment to the trailing null
+    SET B, A ; Save the start
+:lex_line_parse_comment_loop
+    ; Until we find the null at the end of the line
+    IFE [A], 0
+        SET PC, lex_line_parse_comment_done
+    ADD A, 1 ; Look at the next character
+    SET PC, lex_line_parse_comment_loop
+:lex_line_parse_comment_done
+    SET PUSH, NODE_TYPE_TOKEN_COMMENT ; Arg 1 - token type
     SET PUSH, B ; Arg 2 - token start
     SET PUSH, A ; Arg 3 - token past end
     SET PC, lex_line_push_and_finish
