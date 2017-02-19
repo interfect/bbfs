@@ -27,12 +27,14 @@
 ; +---------------------
 ; | Child 1 (or null)
 ; +---------------------
-; | Child 2 (or null)
+; | Child 2 (or null) (always null if child1 is null)
 ; +---------------------
 ; | String start
 ; +---------------------
 ; | String end
 ; +---------------------
+;
+; Nodes with only one child have itas child 1, with child 2 null
 
 .define NODE_SIZEOF, 5
 .define NODE_TYPE, 0
@@ -41,9 +43,42 @@
 .define NODE_START, 3
 .define NODE_END, 4
 
+; For the parsing step, we have a table of parsing rules which are executed in
+; order. Each parsing rule looks like this:
+;
+; +--------------------
+; | Left child type required (if two children are required) or null
+; +--------------------
+; | Hook (returning true or false) to check left child
+; +--------------------
+; | Right child type required (if any node is to be created)
+; +--------------------
+; | Hook (returning true or false) to check right child
+; +--------------------
+; | Type that next token must match (or null)
+; +--------------------
+; | Type of new node to reduce from the left and right children (or null)
+; +--------------------
+; | Flag for whether to shift in the next token after any reduce
+; +--------------------
+;
+; Note that rules with only a child 2 will create nodes with only a child *1*.
+
+.define RULE_SIZEOF, 7
+.define RULE_CHILD1, 0
+.define RULE_FILTER1, 1
+.define RULE_CHILD2, 2
+.define RULE_FILTER2, 3
+.define RULE_TOKEN, 4
+.define RULE_REDUCE, 5
+.define RULE_SHIFT, 6
+
 ; Here are the node types
 
-; Tokens for bottom level lexemes
+; Node type 0 is reserved as a null marker
+.define NODE_TYPE_NULL, 0x0000
+
+; Tokens for bottom level lexemes (tokens)
 
 ; Identifier, which can be a register name, label name, constant name, or
 ; instruction
@@ -71,7 +106,10 @@
 ; Subtraction operator
 .define NODE_TYPE_TOKEN_MINUS, 0x000C
 
-; TODO: higher-level syntax tree nodes
+; Higher-level syntax tree nodes
+
+; A register identifier
+.define NODE_TYPE_REGISTER, 0x1000
 
 ; And some error codes
 .define ASM_ERR_NONE, 0x0000
@@ -79,6 +117,7 @@
 .define ASM_ERR_MEMORY, 0x0002 ; Ran out of heap space for syntax tree nodes
 .define ASM_ERR_STACK, 0x0003 ; Ran out of space on the parsing stack(s)
 .define ASM_ERR_UNTERMINATED, 0x0004 ; Unterminated string or char literal
+.define ASM_ERR_SYNTAX, 0x0005 ; Syntax error: no rule found to apply
 
 
 ;  BBOS Defines
@@ -94,6 +133,13 @@
     JSR lex_line
     SET B, POP ; Get the error code
     
+     ; Print the lex label
+    SET PUSH, str_lexed
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
     ; Print the error code label
     SET PUSH, str_error
     SET PUSH, 0
@@ -107,7 +153,66 @@
     JSR write_hex
     ADD SP, 2
     
-    ; Dump the stack
+    ; Dump the parser stack
+    JSR dump_stack
+    
+    ; Move everything to the token stack
+    JSR unshift_all
+    
+    ; Parse everything
+    ADD SP, 1
+    JSR parse_stack
+    SET B, POP
+    
+     ; Print the parse label
+    SET PUSH, str_parsed
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Print the error code label
+    SET PUSH, str_error
+    SET PUSH, 0
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Print the error code
+    SET PUSH, B
+    SET PUSH, 1
+    JSR write_hex
+    ADD SP, 2
+    
+    ; Dump the parser stack again
+    JSR dump_stack
+    
+    ; Parse everything again
+    ADD SP, 1
+    JSR parse_stack
+    SET B, POP
+    
+     ; Print the parse label
+    SET PUSH, str_parsed
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Print the error code label
+    SET PUSH, str_error
+    SET PUSH, 0
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Print the error code
+    SET PUSH, B
+    SET PUSH, 1
+    JSR write_hex
+    ADD SP, 2
+    
+    ; Dump the parser stack again
     JSR dump_stack
 
 :halt
@@ -116,11 +221,15 @@
 ; Strings
 :str_error
 .asciiz "Error: "
-
+:str_lexed
+.asciiz "Lex:"
+:str_parsed
+.asciiz "Parse:"
 
 ; Assembler input/output for testing
 :program
-.asciiz ":thing SET A, '1' ; Cool beans"
+.asciiz "A"
+;.asciiz ":thing SET A, '1' ; Cool beans"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -508,6 +617,295 @@
     SET Z, POP
     SET PC, POP
 
+; parse_stack()
+; Apply a parser rule to the parser and token stacks if one can be found.
+; [Z]: caller-allocated return space
+; Returns: error code
+:parse_stack
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Rule pointer
+    SET PUSH, B ; Parser stack top pointer
+    SET PUSH, C ; Token stack top pointer
+    SET PUSH, X ; Parser stack node, or child node
+    SET PUSH, Y ; Token stack node
+    SET PUSH, I ; Return value scratch, newly allocated node
+    
+    ; Get the address of the next unused slot in the parser stack
+    SET B, [parser_stack_top]
+    
+    ; And the next unused slot in the token stack
+    SET C, [token_stack_top]
+    
+    ; Scan the rules table, looking for the first matching rule to apply
+    SET A, parser_rules
+:parse_stack_rule_loop
+    ; If there's a rule that says don't do anything, we assume it's the all-null rule.
+    IFE [A+RULE_SHIFT], 0
+        IFE [A+RULE_REDUCE], 0
+            SET PC, parse_stack_rule_end
+            
+    IFE [A+RULE_CHILD1], 0
+        ; Don't check the first child if one isn't used
+        SET PC, parse_stack_child1_ok
+        
+    ; Find the next-to-top item on the parser stack
+    SET X, B
+    SUB X, 2
+    IFL X, parser_stack_start
+        ; We need a next-to-top item for this rule and there isn't one
+        SET PC, parse_stack_rule_next
+    SET X, [X] ; Dereference and get node's address
+    IFN [X+NODE_TYPE], [A+RULE_CHILD1]
+        ; This node isn't the right type for this rule
+        SET PC, parse_stack_rule_next
+        
+    IFE [A+RULE_FILTER1], 0
+        ; No function to filter the first child, so just take it
+        SET PC, parse_stack_child1_ok
+        
+    ; Call the filter function on the node address
+    SET PUSH, X
+    JSR [A+RULE_FILTER1]
+    SET I, POP
+    
+    IFE I, 0
+        ; This child didn't validate for this rule
+        SET PC, parse_stack_rule_next
+    ; Otherwise, fall through to the child 1 valid case
+        
+:parse_stack_child1_ok
+    ; We know child 1 is OK or not used. Check child 2
+    
+    IFE [A+RULE_CHILD2], 0
+        ; Don't check the second/only child if one isn't used
+        SET PC, parse_stack_child2_ok
+        
+    ; Find the top item on the parser stack
+    SET X, B
+    SUB X, 1
+    IFL X, parser_stack_start
+        ; We need a top item for this rule and there isn't one
+        SET PC, parse_stack_rule_next
+    SET X, [X] ; Dereference and get node's address
+    IFN [X+NODE_TYPE], [A+RULE_CHILD2]
+        ; This node isn't the right type for this rule
+        SET PC, parse_stack_rule_next
+        
+    IFE [A+RULE_FILTER2], 0
+        ; No function to filter the first child, so just take it
+        SET PC, parse_stack_child2_ok
+        
+    ; Call the filter function on the node address
+    SET PUSH, X
+    JSR [A+RULE_FILTER2]
+    SET I, POP
+    
+    IFE I, 0
+        ; This child didn't validate for this rule
+        SET PC, parse_stack_rule_next
+    ; Otherwise, fall through to the child 2 valid case
+    
+:parse_stack_child2_ok
+    ; We know child2 is also OK or not used. Check the incoming token.
+    
+    IFE [A+RULE_TOKEN], 0
+        ; Don't check the next token if one isn't used
+        SET PC, parse_stack_token_ok
+    
+    SET Y, C
+    SUB Y, 1
+    IFL Y, token_stack_start
+        ; We need a next token for this rule and there isn't one
+        SET PC, parse_stack_rule_next
+    SET Y, [Y] ; Dereference and get node's address
+    IFN [Y+NODE_TYPE], [A+RULE_TOKEN]
+        ; This token isn't the right type for this rule
+        SET PC, parse_stack_rule_next
+        
+    ; Tokens don't have filter functions, so matching the type is enough
+    
+:parse_stack_token_ok
+    ; We know the token is also OK or not used.
+    ; That means we need to apply this rule!
+    ; First, see if we need to reduce
+    IFE [A+RULE_REDUCE], 0
+        ; No reduce needed. Maybe we need to shift?
+        SET PC, parse_stack_try_shift 
+    
+    ; We definitely need to reduce
+    
+    ; Allocate a new node
+    SET PUSH, NODE_SIZEOF
+    JSR malloc
+    SET I, POP
+    
+    IFE I, 0x0000
+        ; Out of memory
+        SET PC, parse_stack_err_memory
+        
+    ; Zero out right child, which might not get filled
+    SET [I+NODE_CHILD2], 0
+    
+    ; Set its type to the type we project
+    SET [I+NODE_TYPE], [A+RULE_REDUCE]
+    
+    IFE [A+RULE_CHILD1], 0
+        ; No second child needed
+        SET PC, parse_stack_single_child
+    ; Pop a right child from the top of the parser stack
+    SUB B, 1
+    SET [I+NODE_CHILD2], [B]
+:parse_stack_single_child ; If the rule has only one child, make it the left child
+    ; Pop a left child from the top of the parser stack
+    SUB B, 1
+    SET [I+NODE_CHILD1], [B]
+    
+    ; Push the node to the stack
+    SET [B], I
+    ADD B, 1
+    
+    ; Update the stack top in memory
+    SET [parser_stack_top], B
+    
+    ; Propagate up the string bounds from the children
+    ; We always start where the left child starts
+    SET X, [I+NODE_CHILD1]
+    SET [I+NODE_START], [X+NODE_START]
+    SET [I+NODE_END], [X+NODE_END]
+    SET X, [I+NODE_CHILD2]
+    IFN X, 0
+        ; We have a right child, so end where it ends instead
+        SET [I+NODE_END], [X+NODE_END]
+    
+    ; Then fall through to considering a shift
+    
+:parse_stack_try_shift
+    ; Maybe we need to shift a token in
+    
+    IFE [A+RULE_SHIFT], 0
+        ; No shift needed. So rule is applied!
+        SET PC, parse_stack_rule_applied
+    
+    ; Knock the node off the token stack
+    SUB C, 1
+    ; Copy the value
+    SET [B], [C]
+    ; Update the next location on the parser stack
+    ADD B, 1
+    
+    ; Commit stack changes
+    SET [parser_stack_top], B
+    SET [token_stack_top], C
+    
+    ; Shift accomplished!
+    SET PC, parse_stack_rule_applied
+    
+:parse_stack_rule_next
+    ; Try the next rule
+    ADD A, RULE_SIZEOF
+    SET PC, parse_stack_rule_loop
+
+:parse_stack_rule_applied
+    ; We have successfully applied a rule
+    
+    ; TODO: try and apply more rules until we generate a maximal projection and have emptied the token stack
+    
+    ; For now we just use one rule
+    SET [Z], ASM_ERR_NONE
+    SET PC, parse_stack_return
+
+:parse_stack_rule_end
+    ; We ran out of rules! That's an error
+    SET [Z], ASM_ERR_SYNTAX
+    SET PC, parse_stack_return
+:parse_stack_err_memory
+    ; We ran out of memory on our heap
+    SET [Z], ASM_ERR_MEMORY
+    SET PC, parse_stack_return
+:parse_stack_return
+    SET I, POP
+    SET Y, POP
+    SET X, POP
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; Here are our parser rules, in a null-row-terminated table
+:parser_rules
+; Structure:
+; Child 1 type, Child 1 filter, Child 2 type, Child 2 filter, Next token type, Reduce type, shift flag
+; If we see an identifier that can be a register, we should reduce it to a register
+.dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_register, 0, NODE_TYPE_REGISTER, 0
+; If there's nothing else to do, shift in an ID
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_ID, 0, 1
+; Terminate the table
+.dat 0, 0, 0, 0, 0, 0, 0
+
+; filter_is_register(*token)
+; Decide if an ID token is a register name or not.
+; Special registers (PC, SP) don't count
+; [Z]: address of the ID token node
+; Returns: 1 if it is a register name, 0 otherwise
+; Set up frame pointer
+:filter_is_register
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Node address
+    SET PUSH, B ; Length scratch, char value
+    SET A, [Z]
+
+    ; Assume it is a register
+    SET [Z], 1
+    
+    ; Get the length of the identifier
+    SET B, [A+NODE_END]
+    SUB B, [A+NODE_START]
+    
+    IFN B, 1
+        ; If it's not a single letter it can't be a register
+        SET [Z], 0
+        
+    ; Grab the character
+    SET B, [A+NODE_START]
+    SET B, [B]
+    
+    ; Convert to upper case
+    IFG B, 0x5F
+        SUB B, 0x20
+        
+    IFG B, 0x40 ; 'A' - 1
+        IFL B, 0x44 ; 'C' + 1
+            ; Can be a register (A, B, C)
+            SET PC, filter_is_register_done
+            
+    IFG B, 0x57 ; 'X' - 1
+        IFL B, 0x5B ; 'Z' + 1
+            ; Can be a register (X, Y, Z)
+            SET PC, filter_is_register_done
+            
+    IFG B, 0x48 ; 'I' - 1
+        IFL B, 0x4B ; 'J' + 1
+            ; Can be a register (I, J)
+            SET PC, filter_is_register_done
+            
+    ; If we aren't a string starting with any of those letters, we can't be a
+    ; register even if we are the right length.
+    SET [Z], 0
+    
+:filter_is_register_done
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+
 ; assemble_instruction(*line, *dest)
 ; Assemble a single statement in a null-terminated string.
 ; [Z+1]: string to assemble
@@ -791,6 +1189,47 @@
 .asciiz "Node: "
 :str_node_end
 .dat 0x0000
+
+; unshift_all()
+; The lexer drops all the tokens on the parse stack in order. This shifts them
+; back to the token stack, so they can be gone through left to right by the
+; parser.
+; Returns: nothing
+:unshift_all
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Parser stack top address
+    SET PUSH, B ; Token stack top address
+    
+    SET A, [parser_stack_top]
+    SET B, [token_stack_top]
+:unshift_all_loop
+    ; Stop when we hit the bottom of the parser stack
+    IFE A, parser_stack_start
+        SET PC, unshift_all_done
+    
+    ; TODO: check for token stack overflow. Should never happen if we clear it
+    ; out for each line.
+    
+    ; Move the item
+    SUB A, 1
+    SET [B], [A]
+    ADD B, 1
+    
+    ; Check the next item
+    SET PC, unshift_all_loop    
+:unshift_all_done
+    ; Commit the stack changes
+    SET [parser_stack_top], A
+    SET [token_stack_top], B
+
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 .define PARSER_STACK_SIZE, 100
 
