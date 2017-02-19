@@ -48,10 +48,10 @@
 ; Identifier, which can be a register name, label name, constant name, or
 ; instruction
 .define NODE_TYPE_TOKEN_ID, 0x0001
-; Decimal number
-.define NODE_TYPE_TOKEN_DEC, 0x0002
 ; Hexadecimal number
-.define NODE_TYPE_TOKEN_HEX, 0x0003
+.define NODE_TYPE_TOKEN_HEX, 0x0002
+; Decimal number
+.define NODE_TYPE_TOKEN_DEC, 0x0003
 ; String constant ""
 .define NODE_TYPE_TOKEN_STRING, 0x0004
 ; Char constant ''
@@ -78,6 +78,7 @@
 .define ASM_ERR_LEX_BAD_TOKEN, 0x0001 ; Found something that's not a real token
 .define ASM_ERR_MEMORY, 0x0002 ; Ran out of heap space for syntax tree nodes
 .define ASM_ERR_STACK, 0x0003 ; Ran out of space on the parsing stack(s)
+.define ASM_ERR_UNTERMINATED, 0x0004 ; Unterminated string or char literal
 
 
 ;  BBOS Defines
@@ -119,7 +120,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "SET A, 1+2"
+.asciiz "SET A, '1'"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -212,7 +213,7 @@
 
     SET PUSH, A ; Pointer into string
     SET PUSH, B ; Scratch pointer into string
-    SET PUSH, C ; Return scratch
+    SET PUSH, C ; Return scratch and scratch for each parsing case
     
     ; Start at the start of the string
     SET A, [Z]
@@ -259,6 +260,14 @@
         IFL [A], 0x3A ; '9' + 1
             SET PC, lex_line_parse_dec
             
+    ; If we see a quote, parse a string
+    IFE [A], 0x22 ; '"'
+        SET PC, lex_line_parse_string
+        
+    ; If we see a single quote, parse a char
+    IFE [A], 0x27 ; '\''
+        SET PC, lex_line_parse_char
+        
     ; Try a bunch of single-character tokens
     IFE [A], 0x2C ; ','
         SET PC, lex_line_parse_comma
@@ -278,9 +287,9 @@
     SET PC, lex_line_done
     
 :lex_line_parse_id
+    ; Parse an identifier (const name, register name, instruction name, etc.)
     ; Remember the start
     SET B, A
-    
 :lex_line_parse_id_loop
     ; Scan until the next non-ID character
     SET PUSH, [A]
@@ -288,14 +297,10 @@
     SET C, POP
     IFE C, 0
         SET PC, lex_line_parse_id_done
-        
     ADD A, 1
     SET PC, lex_line_parse_id_loop
-    
 :lex_line_parse_id_done
-    
     ; Push an ID token
-    
     SET PUSH, NODE_TYPE_TOKEN_ID ; Arg 1 - type
     SET PUSH, B ; Arg 2 - string start
     SET PUSH, A ; Arg 3 - string past end
@@ -347,6 +352,56 @@
     SET PUSH, A ; Arg 3 - token past end
     SET PC, lex_line_push_and_finish
     
+:lex_line_parse_string
+    ; Parse a string, correctly skipping escaped quotes
+    SET B, A ; Save the start
+    ADD A, 1 ; Look after the open quote
+    SET C, 0 ; Here we use C for tracking escapes
+:lex_line_parse_string_loop
+    IFE C, 0
+        IFE [A], 0x22 ; '"'
+            ; We found an unescaped quote, so finish the constant
+            SET PC, lex_line_parse_string_done
+    SET C, 0 ; Go back to unescaped
+    IFE [A], 0x5C ; '\\'
+        SET C, 1 ; Turn on escape
+    IFE [A], 0
+        ; We hit the line-ending null without a close quote
+        SET PC, lex_line_err_unterminated
+    ADD A, 1 ; Look at the next character
+    SET PC, lex_line_parse_string_loop
+:lex_line_parse_string_done
+    ADD A, 1 ; Include the close quote
+    SET PUSH, NODE_TYPE_TOKEN_STRING ; Arg 1 - token type
+    SET PUSH, B ; Arg 2 - token start
+    SET PUSH, A ; Arg 3 - token past end
+    SET PC, lex_line_push_and_finish
+    
+:lex_line_parse_char
+    ; Parse a char, correctly skipping escaped quotes
+    SET B, A ; Save the start
+    ADD A, 1 ; Look after the open quote
+    SET C, 0 ; Here we use C for tracking escapes
+:lex_line_parse_char_loop
+    IFE C, 0
+        IFE [A], 0x27 ; '\''
+            ; We found an unescaped quote, so finish the constant
+            SET PC, lex_line_parse_char_done
+    SET C, 0 ; Go back to unescaped
+    IFE [A], 0x5C ; '\\'
+        SET C, 1 ; Turn on escape
+    IFE [A], 0
+        ; We hit the line-ending null without a close quote
+        SET PC, lex_line_err_unterminated
+    ADD A, 1 ; Look at the next character
+    SET PC, lex_line_parse_char_loop
+:lex_line_parse_char_done
+    ADD A, 1 ; Include the close quote
+    SET PUSH, NODE_TYPE_TOKEN_CHAR ; Arg 1 - token type
+    SET PUSH, B ; Arg 2 - token start
+    SET PUSH, A ; Arg 3 - token past end
+    SET PC, lex_line_push_and_finish
+    
     ; Here are all the single character tokens
 :lex_line_parse_comma
     SET PUSH, NODE_TYPE_TOKEN_COMMA ; Arg 1 - type
@@ -387,7 +442,10 @@
         SET PC, lex_line_done
     ; Continue with the next token
     SET PC, lex_line_scan_string
-    
+
+:lex_line_err_unterminated
+    ; We had a run-on string
+    SET [Z], ASM_ERR_UNTERMINATED
 :lex_line_done
     SET C, POP
     SET B, POP
