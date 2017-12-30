@@ -205,63 +205,43 @@
 ; Main entry point
 
 :main
+    ; Print the lex label
+    SET PUSH, str_lexing
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+
     ; Lex a line
     SET PUSH, program
     JSR lex_line
     SET B, POP ; Get the error code
     
-     ; Print the lex label
-    SET PUSH, str_lexed
-    SET PUSH, 1
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code label
-    SET PUSH, str_error
-    SET PUSH, 0
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code
+    ; Report error if nonzero
     SET PUSH, B
-    SET PUSH, 1
-    JSR write_hex
-    ADD SP, 2
-    
-    ; Dump the parser stack
-    JSR dump_stack
+    JSR report_error
+    ADD SP, 1
     
     ; Move everything to the token stack
     JSR unshift_all
+    
+    ; Print the parse label
+    SET PUSH, str_parsing
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
     
     ; Parse everything
     SUB SP, 1
     JSR parse_stack
     SET B, POP
     
-     ; Print the parse label
-    SET PUSH, str_parsed
-    SET PUSH, 1
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code label
-    SET PUSH, str_error
-    SET PUSH, 0
-    SET A, BBOS_WRITE_STRING
-    INT BBOS_IRQ_MAGIC
-    ADD SP, 2
-    
-    ; Print the error code
+    ; Report error if nonzero
     SET PUSH, B
-    SET PUSH, 1
-    JSR write_hex
-    ADD SP, 2
+    JSR report_error
+    ADD SP, 1
     
-    ; Dump the parser stack again
     JSR dump_stack
 
 :halt
@@ -270,10 +250,10 @@
 ; Strings
 :str_error
 .asciiz "Error: "
-:str_lexed
-.asciiz "Lex:"
-:str_parsed
-.asciiz "Parse:"
+:str_lexing
+.asciiz "Lex..."
+:str_parsing
+.asciiz "Parse..."
 
 ; Assembler input/output for testing
 :program
@@ -283,6 +263,43 @@
 .dat 0x0000
 .dat 0x0000
 .dat 0x0000
+
+; report_error(value)
+; Print the given error code if it is not ASM_ERR_NONE
+; Returns: nothing
+:report_error
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; BBOS scratch
+    
+    IFE [Z], ASM_ERR_NONE
+        ; No error to report
+        SET PC, report_error_return
+    
+    ; Print the error code label
+    SET PUSH, str_error
+    SET PUSH, 0
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Print the error code
+    SET PUSH, [Z]
+    SET PUSH, 1
+    JSR write_hex
+    ADD SP, 2
+    
+    ; Halt here if it was a bad thing
+    SET PC, halt
+    
+:report_error_return
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
 
 ; write_hex(value)
 ; Print a value as hex on a line
