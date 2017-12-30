@@ -63,6 +63,10 @@
 ; +--------------------
 ;
 ; Note that rules with only a child 2 will create nodes with only a child *1*.
+; This is because we think of the rule as matching the top 2 items on the stack,
+; so the first item in the rule is the next-to-top item on the stack, and the
+; second item in the rule is the top item on the stack. So rules that only match
+; one thing have it in the top item slot.
 
 .define RULE_SIZEOF, 7
 .define RULE_CHILD1, 0
@@ -257,6 +261,8 @@
 
 ; Assembler input/output for testing
 :program
+.asciiz "HWI 1+1"
+:program2
 .asciiz ":thing SET A, [B+'C'] ; Cool beanz"
 :output
 .dat 0x0000
@@ -997,6 +1003,8 @@
 .dat NODE_TYPE_REGEXPOP, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_REGEXP, 0
 ; Dereferences always become arguments
 .dat 0, 0, NODE_TYPE_DEREF, 0, 0, NODE_TYPE_ARG, 0
+; Constants can become arguments if they aren't involved in any expressions
+.dat 0, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_ARG, 0
 ; Opcodes grab arguments
 ; Basic opcode gets first arg
 .dat NODE_TYPE_BASICOPCODE, 0, NODE_TYPE_ARG, 0, 0, NODE_TYPE_BASICANDB, 0
@@ -1014,6 +1022,8 @@
 .dat 0, 0, NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 1
 ; A labeled phrase and a comment make a commented phrase
 .dat NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0
+; An operation and a comment make a commented phrase
+.dat NODE_TYPE_OPERATION, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0
 ; If there's nothing else to do, a line could start with an ID
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_ID, 0, 1
 ; If there's nothing else to do, a line could start with a colon
@@ -1028,8 +1038,26 @@
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_OPENBRACKET, 0, 1
 ; If there's nothing else to do, pull in close brackets
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, 0, 1
+; If there's nothing else to do, pull in constants
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_DEC, 0, 1
+; If there's nothing else to do, pull in constants
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_HEX, 0, 1
+; If there's nothing else to do, pull in constants
+.dat 0, 0, 0, 0, NODE_TYPE_TOKEN_CHAR, 0, 1
+; TODO: Do we want to force a full hierarchy of projections on every line?
+; (i.e. make a commented phrase projection with no comment, etc.?)
+; Or do we just want to let a bunch of things be valid lines?
+; Let's try the latter for now...
 ; A commented phrase can become a whole line
 .dat 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0, 0, NODE_TYPE_LINE, 0
+; As can a labeled phrase by itself
+.dat 0, 0, NODE_TYPE_LABELEDPHRASE, 0, 0, NODE_TYPE_LINE, 0
+; Or just an operation
+.dat 0, 0, NODE_TYPE_OPERATION, 0, 0, NODE_TYPE_LINE, 0
+; Or just a comment
+.dat 0, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_LINE, 0
+; Or just a label
+.dat 0, 0, NODE_TYPE_LABEL, 0, 0, NODE_TYPE_LINE, 0
 ; Terminate the table
 .dat 0, 0, 0, 0, 0, 0, 0
 
