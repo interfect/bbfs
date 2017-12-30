@@ -257,7 +257,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz ":thing SET A, B ; Cool beanz"
+.asciiz ":thing SET A, [B+'C'] ; Cool beanz"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -291,6 +291,9 @@
     SET PUSH, 1
     JSR write_hex
     ADD SP, 2
+    
+    ; Report the stack
+    JSR dump_stack
     
     ; Halt here if it was a bad thing
     SET PC, halt
@@ -964,16 +967,36 @@
 .dat NODE_TYPE_TOKEN_COLON, 0, NODE_TYPE_TOKEN_ID, 0, 0, NODE_TYPE_LABEL, 0
 ; In either order
 .dat NODE_TYPE_TOKEN_ID, 0, NODE_TYPE_TOKEN_COLON, 0, 0, NODE_TYPE_LABEL, 0
+; Otherwise, identifiers are values
+.dat 0, 0, NODE_TYPE_TOKEN_ID, 0, 0, NODE_TYPE_VALUE, 0
+; Constants are also values
+.dat 0, 0, NODE_TYPE_TOKEN_DEC, 0, 0, NODE_TYPE_VALUE, 0
+.dat 0, 0, NODE_TYPE_TOKEN_HEX, 0, 0, NODE_TYPE_VALUE, 0
+.dat 0, 0, NODE_TYPE_TOKEN_CHAR, 0, 0, NODE_TYPE_VALUE, 0
 ; Registers immediately become regexps
 .dat 0, 0, NODE_TYPE_REGISTER, 0, 0, NODE_TYPE_REGEXP, 0
-; Regexps with operators after them pull in the operators
+; Regexps with operators after them pull in the operators, in preference to becoming arguments
 .dat 0, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_PLUS, 0, 1
 .dat 0, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_MINUS, 0, 1
 ; Operators immediately become nodes by precedence
 .dat 0, 0, NODE_TYPE_TOKEN_PLUS, 0, 0, NODE_TYPE_ADDSUBOP, 0
 .dat 0, 0, NODE_TYPE_TOKEN_MINUS, 0, 0, NODE_TYPE_ADDSUBOP, 0
+; Regexps attach trailing operators if possible
+.dat NODE_TYPE_REGEXP, 0, NODE_TYPE_ADDSUBOP, 0, 0, NODE_TYPE_REGEXPOP, 0
+; A regexp surrounded by brackets should become a dereference
+.dat NODE_TYPE_TOKEN_OPENBRACKET, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, NODE_TYPE_DEREFOPEN, 1
+.dat NODE_TYPE_DEREFOPEN, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, 0, 0, NODE_TYPE_DEREF, 0
 ; Regexps become arguments if they can't do anything else
 .dat 0, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_ARG, 0
+; Regexps with operators pull in constants or identifiers
+.dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_ID, 0, 1
+.dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_DEC, 0, 1
+.dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_HEX, 0, 1
+.dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_CHAR, 0, 1
+; Regexps with operators and constants become regexps
+.dat NODE_TYPE_REGEXPOP, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_REGEXP, 0
+; Dereferences always become arguments
+.dat 0, 0, NODE_TYPE_DEREF, 0, 0, NODE_TYPE_ARG, 0
 ; Opcodes grab arguments
 ; Basic opcode gets first arg
 .dat NODE_TYPE_BASICOPCODE, 0, NODE_TYPE_ARG, 0, 0, NODE_TYPE_BASICANDB, 0
@@ -991,7 +1014,7 @@
 .dat 0, 0, NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 1
 ; A labeled phrase and a comment make a commented phrase
 .dat NODE_TYPE_LABELEDPHRASE, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_COMMENTEDPHRASE, 0
-; If there's nothing else to do, shift in an ID
+; If there's nothing else to do, a line could start with an ID
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_ID, 0, 1
 ; If there's nothing else to do, a line could start with a colon
 .dat 0, 0, 0, 0, NODE_TYPE_TOKEN_COLON, 0, 1
