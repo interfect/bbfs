@@ -136,19 +136,21 @@
 .define NODE_TYPE_REGEXP, 0x1007
 ; An expression involving a register with a trailing +/- operator
 .define NODE_TYPE_REGEXPOP, 0x1008
+; To handle "5+A" we also need to handle a *leading* +/- operator
+.define NODE_TYPE_OPREGEXP, 0x1009
 
 ; An expression in an open dereferencing bracket set
-.define NODE_TYPE_DEREFOPEN, 0x1009
+.define NODE_TYPE_DEREFOPEN, 0x100A
 ; A closed dereferencing bracket set
-.define NODE_TYPE_DEREF, 0x100A
+.define NODE_TYPE_DEREF, 0x100B
 
 ; The PC or EX registers, which can't be in expressions
-.define NODE_TYPE_SPECIALREG, 0x100B
+.define NODE_TYPE_SPECIALREG, 0x100C
 
 ; The special PUSH operand, legal only as b (first arg)
-.define NODE_TYPE_PUSH, 0x100C 
+.define NODE_TYPE_PUSH, 0x100D 
 ; The special POP operand, legal only as a (second arg)
-.define NODE_TYPE_POP, 0x100D
+.define NODE_TYPE_POP, 0x100E
 
 ; A legal arument
 .define NODE_TYPE_ARG, 0x2000
@@ -261,7 +263,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "HWI 1+1"
+.asciiz "HWI 1+A"
 :program2
 .asciiz ":thing SET A, [B+'C'] ; Cool beanz"
 :output
@@ -979,6 +981,19 @@
 .dat 0, 0, NODE_TYPE_TOKEN_DEC, 0, 0, NODE_TYPE_VALUE, 0
 .dat 0, 0, NODE_TYPE_TOKEN_HEX, 0, 0, NODE_TYPE_VALUE, 0
 .dat 0, 0, NODE_TYPE_TOKEN_CHAR, 0, 0, NODE_TYPE_VALUE, 0
+; Sums try and pull in addition and subtraction operators
+.dat 0, 0, NODE_TYPE_SUMS, 0, NODE_TYPE_TOKEN_PLUS, 0, 1
+.dat 0, 0, NODE_TYPE_SUMS, 0, NODE_TYPE_TOKEN_MINUS, 0, 1
+; And combine with them
+.dat NODE_TYPE_SUMS, 0, NODE_TYPE_ADDSUBOP, 0, 0, NODE_TYPE_SUMSOP, 0
+; And combine with more values to make sums
+.dat NODE_TYPE_SUMSOP, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_SUMS, 0
+; Values are sums if not combined into exissting sums
+.dat 0, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_SUMS, 0
+; Sums are products if not combined with existing products
+.dat 0, 0, NODE_TYPE_SUMS, 0, 0, NODE_TYPE_PRODUCTS, 0
+; Products are constant expressions if nothing else can be added to them
+.dat 0, 0, NODE_TYPE_PRODUCTS, 0, 0, NODE_TYPE_CONSTEXP, 0
 ; Registers immediately become regexps
 .dat 0, 0, NODE_TYPE_REGISTER, 0, 0, NODE_TYPE_REGEXP, 0
 ; Regexps with operators after them pull in the operators, in preference to becoming arguments
@@ -989,6 +1004,8 @@
 .dat 0, 0, NODE_TYPE_TOKEN_MINUS, 0, 0, NODE_TYPE_ADDSUBOP, 0
 ; Regexps attach trailing operators if possible
 .dat NODE_TYPE_REGEXP, 0, NODE_TYPE_ADDSUBOP, 0, 0, NODE_TYPE_REGEXPOP, 0
+; Regexps attach leading operators if necessary
+.dat NODE_TYPE_ADDSUBOP, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_OPREGEXP, 0
 ; A regexp surrounded by brackets should become a dereference
 .dat NODE_TYPE_TOKEN_OPENBRACKET, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, NODE_TYPE_DEREFOPEN, 1
 .dat NODE_TYPE_DEREFOPEN, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, 0, 0, NODE_TYPE_DEREF, 0
@@ -1000,11 +1017,13 @@
 .dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_HEX, 0, 1
 .dat 0, 0, NODE_TYPE_REGEXPOP, 0, NODE_TYPE_TOKEN_CHAR, 0, 1
 ; Regexps with operators and constants become regexps
-.dat NODE_TYPE_REGEXPOP, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_REGEXP, 0
+.dat NODE_TYPE_REGEXPOP, 0, NODE_TYPE_CONSTEXP, 0, 0, NODE_TYPE_REGEXP, 0
+; Constants and regexps with operators become regexps
+.dat NODE_TYPE_CONSTEXP, 0, NODE_TYPE_OPREGEXP, 0, 0, NODE_TYPE_REGEXP, 0
 ; Dereferences always become arguments
 .dat 0, 0, NODE_TYPE_DEREF, 0, 0, NODE_TYPE_ARG, 0
-; Constants can become arguments if they aren't involved in any expressions
-.dat 0, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_ARG, 0
+; Constexps become arguments if they can't do anything else and aren't grabbed by a regexp
+.dat 0, 0, NODE_TYPE_CONSTEXP, 0, 0, NODE_TYPE_ARG, 0
 ; Opcodes grab arguments
 ; Basic opcode gets first arg
 .dat NODE_TYPE_BASICOPCODE, 0, NODE_TYPE_ARG, 0, 0, NODE_TYPE_BASICANDB, 0
