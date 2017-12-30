@@ -277,7 +277,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz ":thing SET A, B ; Cool beans"
+.asciiz ":thing SET A, B ; Cool beanz"
 :output
 .dat 0x0000
 .dat 0x0000
@@ -685,9 +685,13 @@
         ; If there's not exactly one thing on the parser stack, keep going
         SET PC, parse_stack_keep_going
 
-    ; We know there's just one thing. Is it a maximal projection?
+    ; We know there's just one thing.
+    ; Find the entry on the stack
     SET A, [parser_stack_top]
     SUB A, 1
+    ; Load the address of the heap-allocated node from the stack
+    SET A, [A] 
+    ; Is it a maximal projection?
     IFN [A+NODE_TYPE], NODE_TYPE_LINE
         ; If it's not, keep going
         SET PC, parse_stack_keep_going
