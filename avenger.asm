@@ -263,7 +263,7 @@
 
 ; Assembler input/output for testing
 :program
-.asciiz "HWI 1+A"
+.asciiz ".define THING, OTHER_THING"
 :program2
 .asciiz ":thing SET A, [B+'C'] ; Cool beanz"
 :output
@@ -688,6 +688,9 @@
     ; Allow . (for local labels and directives)
     IFE A, 0x2E ; '.'
         SET [Z], 1
+    ; Allow # (for directives)
+    IFE A, 0x23 ; '#'
+        SET [Z], 1
 
     SET A, POP
     SET Z, POP
@@ -971,6 +974,8 @@
 ; We also reserve the names of opcodes
 .dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_basic_opcode, 0, NODE_TYPE_BASICOPCODE, 0
 .dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_special_opcode, 0, NODE_TYPE_SPECIALOPCODE, 0
+; And directives
+.dat 0, 0, NODE_TYPE_TOKEN_ID, filter_is_directive, 0, NODE_TYPE_DIRECTIVE, 0
 ; Otherwise, if we see a colon and an identifier, that's a label
 .dat NODE_TYPE_TOKEN_COLON, 0, NODE_TYPE_TOKEN_ID, 0, 0, NODE_TYPE_LABEL, 0
 ; In either order
@@ -988,6 +993,8 @@
 .dat NODE_TYPE_SUMS, 0, NODE_TYPE_ADDSUBOP, 0, 0, NODE_TYPE_SUMSOP, 0
 ; And combine with more values to make sums
 .dat NODE_TYPE_SUMSOP, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_SUMS, 0
+; Or combine with regexps to make regexps and allow const + reg
+.dat NODE_TYPE_SUMSOP, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_REGEXP, 0
 ; Values are sums if not combined into exissting sums
 .dat 0, 0, NODE_TYPE_VALUE, 0, 0, NODE_TYPE_SUMS, 0
 ; Sums are products if not combined with existing products
@@ -1006,8 +1013,9 @@
 .dat NODE_TYPE_REGEXP, 0, NODE_TYPE_ADDSUBOP, 0, 0, NODE_TYPE_REGEXPOP, 0
 ; Regexps attach leading operators if necessary
 .dat NODE_TYPE_ADDSUBOP, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_OPREGEXP, 0
-; A regexp surrounded by brackets should become a dereference
+; A regexp or constexp surrounded by brackets should become a dereference
 .dat NODE_TYPE_TOKEN_OPENBRACKET, 0, NODE_TYPE_REGEXP, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, NODE_TYPE_DEREFOPEN, 1
+.dat NODE_TYPE_TOKEN_OPENBRACKET, 0, NODE_TYPE_CONSTEXP, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, NODE_TYPE_DEREFOPEN, 1
 .dat NODE_TYPE_DEREFOPEN, 0, NODE_TYPE_TOKEN_CLOSEBRACKET, 0, 0, NODE_TYPE_DEREF, 0
 ; Regexps become arguments if they can't do anything else
 .dat 0, 0, NODE_TYPE_REGEXP, 0, 0, NODE_TYPE_ARG, 0
@@ -1022,7 +1030,29 @@
 .dat NODE_TYPE_CONSTEXP, 0, NODE_TYPE_OPREGEXP, 0, 0, NODE_TYPE_REGEXP, 0
 ; Dereferences always become arguments
 .dat 0, 0, NODE_TYPE_DEREF, 0, 0, NODE_TYPE_ARG, 0
-; Constexps become arguments if they can't do anything else and aren't grabbed by a regexp
+; A directive and an argument becomes a directive phrase
+.dat NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_CONSTEXP, 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0
+.dat NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_STRING, 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0
+; Directives pull in constants, identifiers, or strings
+.dat 0, 0, NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_ID, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_DEC, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_HEX, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_CHAR, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVE, 0, NODE_TYPE_TOKEN_STRING, 0, 1
+; Directive phrases pull in commas
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0, NODE_TYPE_TOKEN_COMMA, 0, 1
+; And combine with them
+.dat NODE_TYPE_DIRECTIVEPHRASE, 0, NODE_TYPE_TOKEN_COMMA, 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0
+; And then pull in more arguments
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_ID, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_DEC, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_HEX, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_CHAR, 0, 1
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_STRING, 0, 1
+; And combine with them
+.dat NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_CONSTEXP, 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0
+.dat NODE_TYPE_DIRECTIVEPHRASECOMMA, 0, NODE_TYPE_TOKEN_STRING, 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0
+; Constexps become arguments if they can't do anything else and aren't grabbed by a regexp or a directive
 .dat 0, 0, NODE_TYPE_CONSTEXP, 0, 0, NODE_TYPE_ARG, 0
 ; Opcodes grab arguments
 ; Basic opcode gets first arg
@@ -1077,6 +1107,8 @@
 .dat 0, 0, NODE_TYPE_TOKEN_COMMENT, 0, 0, NODE_TYPE_LINE, 0
 ; Or just a label
 .dat 0, 0, NODE_TYPE_LABEL, 0, 0, NODE_TYPE_LINE, 0
+; Or just a directive phrase
+.dat 0, 0, NODE_TYPE_DIRECTIVEPHRASE, 0, 0, NODE_TYPE_LINE, 0
 ; Terminate the table
 .dat 0, 0, 0, 0, 0, 0, 0
 
@@ -1254,6 +1286,56 @@
         SET Z, 1
     ; Otherwise, leave it as 0 (not found = not an opcode)
 :filter_is_special_opcode_done
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; filter_is_directive(*token)
+; Return true if the given ID token matches a known assembler directive
+; [Z]: token node pointer
+; Returns: 1 if ID is a valid assembler directive, 0 otherwise
+:filter_is_directive
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Node pointer
+    SET PUSH, B ; Node string
+    
+    ; Grab the node
+    SET A, [Z]
+    
+    ; Set the return code for an error
+    SET [Z], 0
+    
+    ; Copy the string of the node to a null-terminated buffer
+    SET PUSH, A
+    JSR node_to_string
+    SET B, POP
+    
+    IFE B, 0x0000
+        ; TODO: handle error
+        SET PC, filter_is_directive_done
+    
+    ; Get the directive value
+    SET PUSH, directive_table
+    SET PUSH, B
+    JSR lookup_string
+    SET [Z], POP
+    ADD SP, 1
+    
+    ; Free the buffer
+    SET PUSH, B
+    JSR free
+    ADD SP, 1
+    
+    ; If the value is nonzero, return true
+    IFG [Z], 0
+        SET Z, 1
+    ; Otherwise, leave it as 0 (not found = not a directive)
+:filter_is_directive_done
     SET B, POP
     SET A, POP
     SET Z, POP
@@ -1867,7 +1949,18 @@
 :str_hwi
 .asciiz "HWI"
 
+; Directive names
+:str_define
+.asciiz ".define"
+:str_asciiz
+.asciiz ".asciiz"
+:str_dat
+.asciiz ".dat"
+:str_include
+.asciiz "#include"
+
 ; Now we have null-terminated string, code tables for basic and special opcodes
+; as well as assembler directives.
 
 :opcode_table_basic
 .dat str_set, 0x01
@@ -1909,6 +2002,19 @@
 .dat str_hwn, 0x10
 .dat str_hwq, 0x11
 .dat str_hwi, 0x12
+.dat 0, 0
+
+; Directives are assigned arbitrary codes
+.define DIRECTIVE_DEFINE, 0xF000
+.define DIRECTIVE_ASCIIZ, 0xF001
+.define DIRECTIVE_DAT, 0xF002
+.define DIRECTIVE_INCLUDE, 0xF003
+
+:directive_table
+.dat str_define, DIRECTIVE_DEFINE
+.dat str_asciiz, DIRECTIVE_ASCIIZ
+.dat str_dat, DIRECTIVE_DAT
+.dat str_include, DIRECTIVE_INCLUDE
 .dat 0, 0
 
 .define PARSER_STACK_SIZE, 100
