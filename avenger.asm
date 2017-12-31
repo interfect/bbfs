@@ -9,6 +9,17 @@
 ;
 ; AVENGER: A self-hosting assembler for DCPU-16
 
+; IDEA
+
+; AVENGER is a two-pass, self-hosting assembler, reading from and writing to
+; files on BBFS-formatted disks. On the first pass, the code is read through and
+; the size and address of each instruction is determined. This allows label and
+; symbol values to be determined. A symbol table is filled. On the second pass,
+; the instructions are actually assembled and written out, with symbol values
+; being determined from the completed symbol table.
+
+; PARSING
+
 ; Idea: the assembler has a lexer which finds identifiers, numbers, operators,
 ; quoted strings, and so on.
 ;
@@ -17,6 +28,9 @@
 ; and the next token in the text, and can decide to merge the top two nodes into
 ; a new node of a given type, shift in the next token, or both.
 ;
+
+; ASSEMBLING
+
 ; Finally, the actual assembler bit turns the parse tree into actual assembled
 ; code.
 
@@ -34,7 +48,7 @@
 ; | String end
 ; +---------------------
 ;
-; Nodes with only one child have itas child 1, with child 2 null
+; Nodes with only one child have it as child 1, with child 2 null
 
 .define NODE_SIZEOF, 5
 .define NODE_TYPE, 0
@@ -201,6 +215,8 @@
 .define ASM_ERR_STACK, 0x0003 ; Ran out of space on the parsing stack(s)
 .define ASM_ERR_UNTERMINATED, 0x0004 ; Unterminated string or char literal
 .define ASM_ERR_SYNTAX, 0x0005 ; Syntax error: no rule found to apply
+.define ASM_ERR_SYMBOL_COUNT, 0x0006 ; Ran out of symbol slots
+.define ASM_ERR_SYMBOL_UNDEF, 0x0007 ; Looked for an undefined symbol
 
 
 ;  BBOS Defines
@@ -1396,12 +1412,12 @@
     SET PC, POP
     
 ; lookup_string(*table, *str):
-; Get the table value for the given null-terminated string, or 0
+; Get the table value address for the given null-terminated string, or 0
 ; if it is not an entry in the given table.
 ; Uses a null-tertminated table of string pointers and values.
 ; [Z+1]: table address
 ; [Z]: string key
-; Returns: table value, or 0 if string is not in the table
+; Returns: table value address, or 0 if string is not in the table
 :lookup_string
     ; Set up frame pointer
     SET PUSH, Z
@@ -1429,23 +1445,111 @@
     JSR strcasecmp
     SET B, POP
     ADD SP, 1
-    
+
     IFE B, 0
         ; The string was found
-        SET [Z], [A+1]
-    IFE B, 0
-        SET PC, lookup_string_done
+        SET PC, lookup_string_found
         
     ; Try the next entry
     ADD A, 2
     SET PC, lookup_string_loop
-    
+:lookup_string_found
+    ; Return A+1 since the string is at A
+    SET [Z], A
+    ADD [Z], 1
 :lookup_string_done
     SET C, POP
     SET B, POP
     SET A, POP
     SET Z, POP
     SET PC, POP
+    
+; We use lookup_string to do the symbol table also, and create_symbol/get_symbol to access it.
+
+; Here is the symbol table interface
+
+; create_symbol(*name, value)
+; Add an entry to the symbol table
+; [Z+1]: Pointer to the string name of the symbol. Must not be deleted.
+; [Z]: Value to store in the symbol table.
+; Returns: Error code in [Z]
+:create_symbol
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Symbol index
+    
+    ; Work out how many symbols exist
+    SET A, [symbol_count]
+    
+    IFE A, MAX_SYMBOLS
+        ; The symbol table is full
+        SET PC, create_symbol_full
+        
+    ; Otherwise, say we have another one
+    ADD A, 1
+    SET [symbol_count], A
+    
+    ; Find the actual position in the symbol table
+    MUL A, 2
+    
+    ; Save the symbol
+    SET [symbol_table+A], [Z+1]
+    SET [symbol_table+A+1], [Z]
+    
+    ; Return success
+    SET [Z], ASM_ERR_NONE
+    SET PC, create_symbol_done
+    
+:create_symbol_full
+    ; Too many symbols!
+    SET [Z], ASM_ERR_SYMBOL_COUNT
+:create_symbol_done
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+; get_symbol(*name)
+; Get an entry from the symbol table, or complain and halt if not defined.
+; [Z]: Pointer to the string name of the symbol.
+; Returns: Symbol value.
+:get_symbol
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+    
+    SET PUSH, A ; Symbol value pointer
+    
+    ; Call lookup_string
+    SET PUSH, symbol_table
+    SET PUSH, [Z]
+    JSR lookup_string
+    SET A, POP
+    ADD SP, 1
+    
+    IFE A, 0
+        ; Not a real symbol!
+        SET PC, get_symbol_undefined
+    
+    ; Otherwise, load and return its value
+    SET [Z], [A]
+    SET PC, get_symbol_return
+    
+:get_symbol_undefined
+    ; Handle an error
+    ; TODO: report missing symbol name
+    SET PUSH, ASM_ERR_SYMBOL_UNDEF
+    JSR report_error
+    ; Should not return
+:get_symbol_return
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+    
+
     
     
 ; strcasecmp(*str1, *str2):
@@ -1958,6 +2062,8 @@
 .asciiz ".dat"
 :str_include
 .asciiz "#include"
+:str_reserve
+.asciiz ".reserve"
 
 ; Now we have null-terminated string, code tables for basic and special opcodes
 ; as well as assembler directives.
@@ -2009,14 +2115,26 @@
 .define DIRECTIVE_ASCIIZ, 0xF001
 .define DIRECTIVE_DAT, 0xF002
 .define DIRECTIVE_INCLUDE, 0xF003
+.define DIRECTIVE_RESERVE, 0xF004
 
 :directive_table
 .dat str_define, DIRECTIVE_DEFINE
 .dat str_asciiz, DIRECTIVE_ASCIIZ
 .dat str_dat, DIRECTIVE_DAT
 .dat str_include, DIRECTIVE_INCLUDE
+.dat str_reserve, DIRECTIVE_RESERVE
 .dat 0, 0
 
+; Symbols live in a table of 2-word entries like the above
+.define MAX_SYMBOLS 1024
+:symbol_count
+.dat 0
+:symbol_table
+; Each symbol is 2 words, so do this twice
+.reserve MAX_SYMBOLS
+.reserve MAX_SYMBOLS
+
+; This is how big our token stacks should be for the parser
 .define PARSER_STACK_SIZE, 100
 
 ; Put a stack for parsing.
