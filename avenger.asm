@@ -217,6 +217,7 @@
 .define ASM_ERR_SYNTAX, 0x0005 ; Syntax error: no rule found to apply
 .define ASM_ERR_SYMBOL_COUNT, 0x0006 ; Ran out of symbol slots
 .define ASM_ERR_SYMBOL_UNDEF, 0x0007 ; Looked for an undefined symbol
+.define ASM_ERR_SEMANTICS, 0x0008 ; Error interpreting parsed code
 
 
 ;  BBOS Defines
@@ -264,7 +265,24 @@
     JSR report_error
     ADD SP, 1
     
-    JSR dump_stack
+    ; Otherwise, do assembly
+    
+    ; Print the pass 1 label
+    SET PUSH, str_pass1
+    SET PUSH, 1
+    SET A, BBOS_WRITE_STRING
+    INT BBOS_IRQ_MAGIC
+    ADD SP, 2
+    
+    ; Do pass 1 (filling symbol table, etc.)
+    SET PUSH, [parser_stack_start]
+    JSR assemble_pass1
+    SET B, POP
+    
+    ; Report error if nonzero
+    SET PUSH, B
+    JSR report_error
+    ADD SP, 1
 
 :halt
     SET PC, halt
@@ -276,6 +294,8 @@
 .asciiz "Lex..."
 :str_parsing
 .asciiz "Parse..."
+:str_pass1
+.asciiz "Pass 1 (interpret)..."
 
 ; Assembler input/output for testing
 :program
@@ -1620,6 +1640,132 @@
     SET Z, POP
     SET PC, POP
 
+; get_directive(*parsed_tree)
+; Returns the directive code for the given parsed syntax tree, or 0 if it is not a directive statement.
+; [Z]: Address of the root NODE_TYPE_LINE parser node
+; Returns: Directive code, or 0 if the line is not a NODE_TYPE_DIRECTIVEPHRASE
+:get_directive
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Parse tree scratch
+    SET PUSH, B ; Node string copy
+    SET PUSH, C ; Directive code
+    
+    ; Find the root node
+    SET A, [Z]
+    
+:get_directive_loop
+    IFE [A+NODE_TYPE], NODE_TYPE_DIRECTIVE
+        ; We found it
+        SET PC, get_directive_found
+
+    ; Look at the first child
+    SET A, [A+NODE_CHILD1]
+    
+    IFE A, 0
+        ; There is no child
+        SET PC, get_directive_fail
+    
+    ; Otherwise keep recursing left
+    ; TODO: alter to support labeled directives, in which case we need to go right.
+    SET PC, get_directive_loop
+:get_directive_found
+    ; The NODE_TYPE_DIRECTIVE node is in A    
+    ; Copy its string value
+    SET PUSH, A
+    JSR node_to_string
+    SET B, POP
+    
+    IFE B, 0
+        ; Probably out of memory
+        SET PC, get_directive_mem
+    
+    ; Look it up in the directives table
+    SET PUSH, directive_table
+    SET PUSH, B
+    JSR lookup_string
+    SET C, POP
+    ADD SP, 1
+    
+    ; Free the string
+    SET PUSH, B
+    JSR free
+    ADD SP, 1
+    
+    IFE C, 0
+        ; Not found
+        SET PC, get_directive_fail
+        
+    ; Otherwise we found it. Return it
+    SET [Z], [C]
+    SET PC, get_directive_return
+:get_directive_mem
+    ; Ran out of memory
+    SET PUSH, ASM_ERR_MEMORY
+    JSR report_error
+    ; Should not return
+:get_directive_fail
+    ; This is not a directive
+    SET [Z], 0
+:get_directive_return
+    SET C, POP
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
+
+    
+; assemble_pass1(*parsed_tree)
+; Given the root of a parsed statement, do pass 1 of the assembly.
+; If it defines any symbols, add them to the symbol table.
+; If it is an include, do the include
+; If it is a statement, work out how long it is and push the address counter up
+; Updates the global address counter.
+; [Z]: Address of the root NODE_TYPE_LINE parser node for the line.
+; Returns: Error code
+:assemble_pass1
+    ; Set up frame pointer
+    SET PUSH, Z
+    SET Z, SP
+    ADD Z, 2
+
+    SET PUSH, A ; Parse tree root
+    SET PUSH, B ; Semantic scratch
+    
+    ; Find the root node
+    SET A, [Z]
+    
+    ; Is it a directive?
+    SET PUSH, A
+    JSR get_directive
+    SET B, POP
+    IFE B, 0
+        SET PC, assemble_pass1_not_directive
+    
+    ; It's a directive
+    ; Report it
+    SET PUSH, B
+    SET PUSH, 1
+    JSR write_hex
+    ADD SP, 2
+    
+    ; TODO: follow it
+    
+    ; Say we succeeded
+    SET [Z], ASM_ERR_NONE
+    SET PC, assemble_pass1_return
+    
+:assemble_pass1_not_directive
+    ; If we get here, we don't recognize this tree as anything we can use
+    SET [Z], ASM_ERR_SEMANTICS
+:assemble_pass1_return
+    SET B, POP
+    SET A, POP
+    SET Z, POP
+    SET PC, POP
 
 ; assemble_instruction(*line, *dest)
 ; Assemble a single statement in a null-terminated string.
@@ -2124,6 +2270,11 @@
 .dat str_include, DIRECTIVE_INCLUDE
 .dat str_reserve, DIRECTIVE_RESERVE
 .dat 0, 0
+
+; As we assemble the binary, we keep this address counter in sync with the
+; address of the statement we are assembling next.
+:address_counter
+.dat 0
 
 ; Symbols live in a table of 2-word entries like the above
 .define MAX_SYMBOLS 1024
